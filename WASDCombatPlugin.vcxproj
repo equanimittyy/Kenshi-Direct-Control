@@ -53,14 +53,14 @@
     <LinkIncremental>true</LinkIncremental>
     <OutDir>$(ProjectDir)$(ProjectName)\</OutDir>
     <IntDir>$(ProjectDir)x64\Debug\</IntDir>
-    <IncludePath>$(KENSHILIB_DIR)/Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\KenshiLib\Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\boost_1_60_0;$(IncludePath)</IncludePath>
+    <IncludePath>$(KENSHILIB_DIR)/Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\KenshiLib\Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\KenshiLib\Include\ogre;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\boost_1_60_0;$(IncludePath)</IncludePath>
     <LibraryPath>$(KENSHILIB_DIR)/Libraries/;$(SolutionDir)..\KenshiLib_Examples_deps\KenshiLib\Libraries\;$(SolutionDir)..\KenshiLib_Examples_deps\boost_1_60_0\stage\lib\;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
     <OutDir>$(ProjectDir)$(ProjectName)\</OutDir>
     <IntDir>$(ProjectDir)x64\Release\</IntDir>
-    <IncludePath>$(KENSHILIB_DIR)/Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\KenshiLib\Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\boost_1_60_0;$(IncludePath)</IncludePath>
+    <IncludePath>$(KENSHILIB_DIR)/Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\KenshiLib\Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\KenshiLib\Include\ogre;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\boost_1_60_0;$(IncludePath)</IncludePath>
     <LibraryPath>$(KENSHILIB_DIR)/Libraries/;$(SolutionDir)..\KenshiLib_Examples_deps\KenshiLib\Libraries\;$(SolutionDir)..\KenshiLib_Examples_deps\boost_1_60_0\stage\lib\;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
