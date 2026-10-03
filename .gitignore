@@ -6,8 +6,7 @@
 *.sln.docstates
 
 # Build output (OutDir and IntDir in WASDCombatPlugin.vcxproj)
-WASDCombatPlugin/
-x64/
+dist/
 [Dd]ebug/
 [Rr]elease/
 

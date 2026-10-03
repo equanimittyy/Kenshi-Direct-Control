@@ -71,26 +71,30 @@ The project searches `$(KENSHILIB_DIR)` before the sibling folder. If `KENSHILIB
 
 ## 4. Build the plugin
 
-1. Close Kenshi, if it runs.
-2. Open the **Developer Command Prompt** of your Visual Studio version, and go to the repository root.
-3. Run the build:
+1. In the repository root, run `build.cmd`. It finds MSBuild with `vswhere`, builds **Release | x64**, and stops with `Build failed.` if the build fails.
+
+   To build by hand instead, open the **Developer Command Prompt** of your Visual Studio version, go to the repository root, and run:
 
    ```
    msbuild WASDCombatPlugin.sln /p:Configuration=Release /p:Platform=x64
    ```
 
-4. Check that `WASDCombatPlugin\WASDCombatPlugin.dll` exists. The project writes the DLL to this folder, not to `x64\Release\`, which holds only intermediate files.
+2. Check that `dist\WASDCombatPlugin\` exists. After each build, the project puts the complete mod folder there: the DLL and the files in `mod\`. Git ignores `dist\`.
+
+| Path | Contents |
+|---|---|
+| `mod\` | The mod files that the build does not make: `RE_Kenshi.json`, which tells RE_Kenshi to load the DLL, `WASDCombatPlugin.mod`, an empty Kenshi data file that puts the mod in the launcher mod list, and `WASDCombatPlugin.ini` |
+| `dist\WASDCombatPlugin\` | The mod folder to install |
+| `dist\bin\` | The linker output, including the `.pdb` file for crash debugging |
+| `dist\obj\` | The intermediate files |
 
 `BuildStepCompat.targets` lets MSBuild build the `v100` project outside the Visual Studio IDE. The project imports it, so you do not need to do anything for it.
 
 ## 5. Install the build in Kenshi
 
-This repository does not contain the complete mod folder. Install the released mod once, then replace its DLL with your build.
-
-1. Download the release from [Nexus Mods](https://www.nexusmods.com/kenshi/mods/2017). Copy its `WASDCombatPlugin` folder into `Kenshi\mods\`.
-2. If you subscribe to the mod on the Steam Workshop, unsubscribe. Then only your build loads, and a Workshop update does not replace your DLL.
-3. Copy `WASDCombatPlugin\WASDCombatPlugin.dll` from the repository into `Kenshi\mods\WASDCombatPlugin\`, and replace the old file.
-4. If you changed `WASDCombatPlugin.ini`, copy it too.
+1. If you subscribe to the mod on the Steam Workshop, unsubscribe. Then only your build loads.
+2. Copy the `dist\WASDCombatPlugin\` folder into `Kenshi\mods\`, and replace the files that are there. The result is `Kenshi\mods\WASDCombatPlugin\WASDCombatPlugin.dll`.
+3. In the Kenshi launcher, open the mod list and enable **WASDCombatPlugin**.
 
 ## 6. Test in game
 

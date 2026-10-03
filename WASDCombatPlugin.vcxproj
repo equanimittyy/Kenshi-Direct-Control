@@ -51,15 +51,15 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <OutDir>$(ProjectDir)$(ProjectName)\</OutDir>
-    <IntDir>$(ProjectDir)x64\Debug\</IntDir>
+    <OutDir>$(ProjectDir)dist\bin\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)dist\obj\Debug\</IntDir>
     <IncludePath>$(KENSHILIB_DIR)/Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\KenshiLib\Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\KenshiLib\Include\ogre;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\boost_1_60_0;$(IncludePath)</IncludePath>
     <LibraryPath>$(KENSHILIB_DIR)/Libraries/;$(SolutionDir)..\KenshiLib_Examples_deps\KenshiLib\Libraries\;$(SolutionDir)..\KenshiLib_Examples_deps\boost_1_60_0\stage\lib\;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <OutDir>$(ProjectDir)$(ProjectName)\</OutDir>
-    <IntDir>$(ProjectDir)x64\Release\</IntDir>
+    <OutDir>$(ProjectDir)dist\bin\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)dist\obj\Release\</IntDir>
     <IncludePath>$(KENSHILIB_DIR)/Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\KenshiLib\Include;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\KenshiLib\Include\ogre;$(MSBuildThisFileDirectory)..\KenshiLib_Examples_deps\boost_1_60_0;$(IncludePath)</IncludePath>
     <LibraryPath>$(KENSHILIB_DIR)/Libraries/;$(SolutionDir)..\KenshiLib_Examples_deps\KenshiLib\Libraries\;$(SolutionDir)..\KenshiLib_Examples_deps\boost_1_60_0\stage\lib\;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
@@ -95,9 +95,16 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="WASDCombatPlugin.cpp" />
+    <ClCompile Include="src\WASDCombatPlugin.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!-- The linker also writes .pdb, .lib, and .exp files to OutDir, so only the DLL joins the mod files in the shippable folder. -->
+  <Target Name="StageModFolder" AfterTargets="Build">
+    <ItemGroup>
+      <ModFiles Include="$(ProjectDir)mod\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ModFiles);$(TargetPath)" DestinationFolder="$(ProjectDir)dist\$(ProjectName)\" SkipUnchangedFiles="true" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
