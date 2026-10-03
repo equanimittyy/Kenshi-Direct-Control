@@ -1,727 +1,691 @@
 static void (*s_mainLoopOrig)(GameWorld* thisptr, float time);
 
-static void mainLoop_hook(GameWorld* thisptr, float time)
+static void mlWaitForSafeReacquire(GameWorld* thisptr, float time)
 {
-    // The stabilization countdown runs here so it advances while the shutdown flag is held.
-    if (s_dcShutdownInProgress)
+    if (!s_hookBlockLoggedMain) {
+        s_hookBlockLoggedMain = true;
+        DebugLog("[WASDCombat] dc_hooks_blocked_during_loadgame hook=mainLoop"); }
+
+    if (ou && ou->player) s_mainLoopOrig(thisptr, time);
+
+    if (s_loadGuardActive && ou && ou->player && !ou->isLoadingFromASaveGame())
     {
-        if (!s_hookBlockLoggedMain) {
-            s_hookBlockLoggedMain = true;
-            DebugLog("[WASDCombat] dc_hooks_blocked_during_loadgame hook=mainLoop"); }
+        Character* chStab  = ou->player->selectedCharacter.getCharacter();
+        bool chValid       = (chStab != nullptr);
+        bool mvValid       = chValid && (chStab->movement != nullptr);
+        bool noStaleAnchor = (s_freeMoveAnchor == nullptr);
+        bool allClear      = chValid && mvValid && noStaleAnchor;
 
-        if (ou && ou->player) s_mainLoopOrig(thisptr, time);
-
-        if (s_loadGuardActive && ou && ou->player && !ou->isLoadingFromASaveGame())
+        if (allClear)
         {
-            Character* chStab  = ou->player->selectedCharacter.getCharacter();
-            bool chValid       = (chStab != nullptr);
-            bool mvValid       = chValid && (chStab->movement != nullptr);
-            bool noStaleAnchor = (s_freeMoveAnchor == nullptr);
-            bool allClear      = chValid && mvValid && noStaleAnchor;
-
-            if (allClear)
+            if (s_stabilizationCountdown == 0)
             {
-                if (s_stabilizationCountdown == 0)
-                {
-                    s_stabilizationCountdown = 60;
-                    DebugLog("[WASDCombat] reload_stabilization_started");
-                }
-                s_stabilizationCountdown--;
+                s_stabilizationCountdown = 60;
+                DebugLog("[WASDCombat] reload_stabilization_started");
             }
-            else
-            {
-                s_stabilizationCountdown = 0;
-            }
+            s_stabilizationCountdown--;
+        }
+        else
+        {
+            s_stabilizationCountdown = 0;
+        }
 
-            {
-                ULONGLONG _nowW = GetTickCount64();
-                if (_nowW - s_shutdownWaitLogTick >= 1000) { s_shutdownWaitLogTick = _nowW;
-                    char _wbuf[256];
-                    sprintf_s(_wbuf, sizeof(_wbuf),
-                        "[WASDCombat] dc_loadgame_waiting_for_safe_reacquire "
-                        "player=valid character=%s movement=%s anchor_clear=%s frames=%d/60",
-                        chValid ? "valid" : "invalid",
-                        mvValid ? "valid" : "invalid",
-                        noStaleAnchor ? "yes" : "no",
-                        allClear ? (60 - s_stabilizationCountdown) : 0);
-                    DebugLog(_wbuf);
-                }
-            }
-
-            if (allClear && s_stabilizationCountdown == 0)
-            {
-                s_loadGuardActive        = false;
-                s_postLoadReacquire      = true;
-                s_stabilizationCountdown = 0;
-                DebugLog("[WASDCombat] dc_loadgame_safe_reacquire_complete");
-                s_dcShutdownInProgress   = false;
-                DebugLog("[WASDCombat] dc_shutdown_flag_cleared_after_safe_reacquire");
-                DebugLog("[WASDCombat] reload_complete_reacquire_started");
+        {
+            ULONGLONG _nowW = GetTickCount64();
+            if (_nowW - s_shutdownWaitLogTick >= 1000) { s_shutdownWaitLogTick = _nowW;
+                char _wbuf[256];
+                sprintf_s(_wbuf, sizeof(_wbuf),
+                    "[WASDCombat] dc_loadgame_waiting_for_safe_reacquire "
+                    "player=valid character=%s movement=%s anchor_clear=%s frames=%d/60",
+                    chValid ? "valid" : "invalid",
+                    mvValid ? "valid" : "invalid",
+                    noStaleAnchor ? "yes" : "no",
+                    allClear ? (60 - s_stabilizationCountdown) : 0);
+                DebugLog(_wbuf);
             }
         }
-        return;
-    }
 
-    if (!s_profInited)
-    {
-        LARGE_INTEGER freq;
-        QueryPerformanceFrequency(&freq);
-        s_profFreq         = freq.QuadPart;
-        s_profInited       = true;
-        s_prof_windowStart = GetTickCount64();
-    }
-    ScopeTimer _tML(s_prof_mainLoop);
-
-    // 1. Safety gate.
-    {
-        bool ouNull  = (ou == nullptr);
-        bool loadSig = ouNull || !ou->player || ou->isLoadingFromASaveGame();
-
-        if (loadSig)
+        if (allClear && s_stabilizationCountdown == 0)
         {
-            if (ouNull)
+            s_loadGuardActive        = false;
+            s_postLoadReacquire      = true;
+            s_stabilizationCountdown = 0;
+            DebugLog("[WASDCombat] dc_loadgame_safe_reacquire_complete");
+            s_dcShutdownInProgress   = false;
+            DebugLog("[WASDCombat] dc_shutdown_flag_cleared_after_safe_reacquire");
+            DebugLog("[WASDCombat] reload_complete_reacquire_started");
+        }
+    }
+}
+
+static bool mlSafetyGate(GameWorld* thisptr, float time)
+{
+    bool ouNull  = (ou == nullptr);
+    bool loadSig = ouNull || !ou->player || ou->isLoadingFromASaveGame();
+
+    if (loadSig)
+    {
+        if (ouNull)
+        {
+            if (!s_dcShutdownInProgress)
             {
-                if (!s_dcShutdownInProgress)
+                s_dcShutdownInProgress = true;
+                DebugLog("[WASDCombat] dc_loadgame_shutdown_begin");
+                if (s_userWantsDC || s_mode == MODE_FREE_MOVE)
                 {
-                    s_dcShutdownInProgress = true;
-                    DebugLog("[WASDCombat] dc_loadgame_shutdown_begin");
-                    if (s_userWantsDC || s_mode == MODE_FREE_MOVE)
-                    {
-                        DebugLog("[WASDCombat] dc_hard_shutdown_reason=LOADGAME");
-                        s_userWantsDC = false;
-                    }
-                    s_healingJobActive             = false;
-                    s_medicalJobSuppressedThisHold = false;
-                    s_freeMoveAnchor    = nullptr;
-                    s_selectedCharacter = nullptr;
-                    DebugLog("[WASDCombat] dc_loadgame_clear_anchor");
-                    s_anchorMovement    = nullptr;
-                    s_selectedMovement  = nullptr;
-                    s_prevAttackTarget  = nullptr;
-                    DebugLog("[WASDCombat] dc_loadgame_clear_movement");
-                    s_savedFreeCameraMode    = false;
-                    s_cameraLockInvSuspend   = false;
-                    s_cameraLockTurretSuspend = false;
-                    s_savedCamFollowOffY     = 0.0f;
-                    DebugLog("[WASDCombat] dc_loadgame_clear_camera");
-                    s_dcPtrLossActive = false;
-                    s_loadGuardActive = true;
-                    clearAllState();
-                    s_vHud.label = nullptr;
-                    s_vHud.shown = false;
-                    s_hudReady   = false;
-                    DebugLog("[WASDCombat] dc_loadgame_old_state_cleared");
-                    DebugLog("[WASDCombat] load_guard_enabled");
-                    DebugLog("[WASDCombat] dc_loadgame_shutdown_complete");
+                    DebugLog("[WASDCombat] dc_hard_shutdown_reason=LOADGAME");
+                    s_userWantsDC = false;
                 }
-                hudUpdate();
-                return;
+                s_healingJobActive             = false;
+                s_medicalJobSuppressedThisHold = false;
+                s_freeMoveAnchor    = nullptr;
+                s_selectedCharacter = nullptr;
+                DebugLog("[WASDCombat] dc_loadgame_clear_anchor");
+                s_anchorMovement    = nullptr;
+                s_selectedMovement  = nullptr;
+                s_prevAttackTarget  = nullptr;
+                DebugLog("[WASDCombat] dc_loadgame_clear_movement");
+                s_savedFreeCameraMode    = false;
+                s_cameraLockInvSuspend   = false;
+                s_cameraLockTurretSuspend = false;
+                s_savedCamFollowOffY     = 0.0f;
+                DebugLog("[WASDCombat] dc_loadgame_clear_camera");
+                s_dcPtrLossActive = false;
+                s_loadGuardActive = true;
+                clearAllState();
+                s_vHud.label = nullptr;
+                s_vHud.shown = false;
+                s_hudReady   = false;
+                DebugLog("[WASDCombat] dc_loadgame_old_state_cleared");
+                DebugLog("[WASDCombat] load_guard_enabled");
+                DebugLog("[WASDCombat] dc_loadgame_shutdown_complete");
             }
+            hudUpdate();
+            return true;
+        }
 
-            if (s_userWantsDC)
+        if (s_userWantsDC)
+        {
+            // A save-load frees the anchor while ou->player can still be valid: never dereference it here.
+            if (ou->isLoadingFromASaveGame())
             {
-                // A save-load frees the anchor while ou->player can still be valid: never dereference it here.
-                if (ou->isLoadingFromASaveGame())
-                {
-                    if (!s_dcPtrLossActive)
-                    {
-                        s_dcPtrLossActive      = true;
-                        s_dcPtrLossStartedAt   = GetTickCount64();
-                        s_dcPtrLossLastLogTick = 0;
-                        // Do not touch speed: charMovUpdate_hook already cached the real tier for the reacquire.
-                        DebugLog("[WASDCombat] dc_realload_anchor_dropped_preserving_intent");
-                    }
-                    s_freeMoveAnchor    = nullptr;
-                    s_anchorMovement    = nullptr;
-                    s_selectedCharacter = nullptr;
-                    s_selectedMovement  = nullptr;
-                    hudUpdate();
-                    if (ou->player) s_mainLoopOrig(thisptr, time);
-                    return;
-                }
-
-                // A chunk microload does not free characters, so the anchor dereference below is safe.
                 if (!s_dcPtrLossActive)
                 {
                     s_dcPtrLossActive      = true;
                     s_dcPtrLossStartedAt   = GetTickCount64();
                     s_dcPtrLossLastLogTick = 0;
-                    if (s_freeMoveAnchor && s_freeMoveAnchor->movement)
-                        s_dcPreservedSpeedMode = s_freeMoveAnchor->movement->speedOrders;
-                    DebugLog("[WASDCombat] dc_pointer_loss_preserving_user_intent");
-                    if (!ou->player)
-                        DebugLog("[WASDCombat] dc_pointer_loss_preserved_microload");
-                    if (ou->player && ou->player->isTrackingCharacter())
-                        DebugLog("[WASDCombat] camera_lock_lost_during_long_stream");
+                    // Do not touch speed: charMovUpdate_hook already cached the real tier for the reacquire.
+                    DebugLog("[WASDCombat] dc_realload_anchor_dropped_preserving_intent");
                 }
-
-                // No timeout: pointer loss of any length only pauses injection until the anchor is valid.
-
-                bool anchorOk = (ou->player != nullptr) &&
-                                (s_freeMoveAnchor != nullptr) &&
-                                (s_freeMoveAnchor->movement != nullptr);
-                if (!anchorOk)
-                {
-                    s_anchorMovement = nullptr;
-                    if (g_log.debugLogging)
-                    {
-                        ULONGLONG nowL = GetTickCount64();
-                        if (nowL - s_dcPtrLossLastLogTick >= 500)
-                        {
-                            s_dcPtrLossLastLogTick = nowL;
-                            char dlbuf[80];
-                            sprintf_s(dlbuf, sizeof(dlbuf),
-                                "[WASDCombat] dc_pointer_loss_duration_ms=%llu",
-                                nowL - s_dcPtrLossStartedAt);
-                            DebugLog(dlbuf);
-                        }
-                    }
-                    hudUpdate();
-                    if (ou->player) s_mainLoopOrig(thisptr, time);
-                    return;
-                }
-
-                s_anchorMovement = s_freeMoveAnchor->movement;
+                s_freeMoveAnchor    = nullptr;
+                s_anchorMovement    = nullptr;
+                s_selectedCharacter = nullptr;
+                s_selectedMovement  = nullptr;
+                hudUpdate();
+                if (ou->player) s_mainLoopOrig(thisptr, time);
+                return true;
             }
-            else
+
+            // A chunk microload does not free characters, so the anchor dereference below is safe.
+            if (!s_dcPtrLossActive)
             {
-                if (!s_loadGuardActive)
+                s_dcPtrLossActive      = true;
+                s_dcPtrLossStartedAt   = GetTickCount64();
+                s_dcPtrLossLastLogTick = 0;
+                if (s_freeMoveAnchor && s_freeMoveAnchor->movement)
+                    s_dcPreservedSpeedMode = s_freeMoveAnchor->movement->speedOrders;
+                DebugLog("[WASDCombat] dc_pointer_loss_preserving_user_intent");
+                if (!ou->player)
+                    DebugLog("[WASDCombat] dc_pointer_loss_preserved_microload");
+                if (ou->player && ou->player->isTrackingCharacter())
+                    DebugLog("[WASDCombat] camera_lock_lost_during_long_stream");
+            }
+
+            // No timeout: pointer loss of any length only pauses injection until the anchor is valid.
+
+            bool anchorOk = (ou->player != nullptr) &&
+                            (s_freeMoveAnchor != nullptr) &&
+                            (s_freeMoveAnchor->movement != nullptr);
+            if (!anchorOk)
+            {
+                s_anchorMovement = nullptr;
+                if (g_log.debugLogging)
                 {
-                    if (!s_dcShutdownInProgress)
+                    ULONGLONG nowL = GetTickCount64();
+                    if (nowL - s_dcPtrLossLastLogTick >= 500)
                     {
-                        s_dcShutdownInProgress = true;
-                        DebugLog("[WASDCombat] dc_loadgame_shutdown_begin");
+                        s_dcPtrLossLastLogTick = nowL;
+                        char dlbuf[80];
+                        sprintf_s(dlbuf, sizeof(dlbuf),
+                            "[WASDCombat] dc_pointer_loss_duration_ms=%llu",
+                            nowL - s_dcPtrLossStartedAt);
+                        DebugLog(dlbuf);
                     }
-                    s_healingJobActive             = false;
-                    s_medicalJobSuppressedThisHold = false;
-                    s_freeMoveAnchor               = nullptr;
-                    s_anchorMovement               = nullptr;
-                    s_selectedCharacter            = nullptr;
-                    s_selectedMovement             = nullptr;
-                    s_prevAttackTarget             = nullptr;
-                    s_savedFreeCameraMode          = false;
-                    s_cameraLockInvSuspend         = false;
-                    s_cameraLockTurretSuspend      = false;
-                    s_savedCamFollowOffY           = 0.0f;
-                    s_loadGuardActive = true;
-                    clearAllState();
-                    s_vHud.label = nullptr;
-                    s_vHud.shown = false;
-                    s_hudReady   = false;
-                    DebugLog("[WASDCombat] dc_loadgame_old_state_cleared");
-                    DebugLog("[WASDCombat] load_guard_enabled");
                 }
                 hudUpdate();
-                if (ou && ou->player) s_mainLoopOrig(thisptr, time);
-                return;
+                if (ou->player) s_mainLoopOrig(thisptr, time);
+                return true;
             }
-        }
-        else if (s_dcPtrLossActive)
-        {
-            s_dcPtrLossActive = false;
-            Character* chR = ou->player->selectedCharacter.getCharacter();
-            if (chR && s_userWantsDC)
-            {
-                DebugLog("[WASDCombat] dc_reacquire_after_long_stream");
-                s_freeMoveAnchor = chR;
-                s_anchorMovement = chR->movement;
-                s_dcPtrLossLastLogTick = 0;
-                if (chR->movement && s_dcPreservedSpeedMode < GROUPED)
-                {
-                    chR->movement->setDesiredSpeedOrders(s_dcPreservedSpeedMode);
-                    chR->movement->setDesiredSpeed(s_dcPreservedSpeedMode);
-                }
-                if (s_mode != MODE_FREE_MOVE)
-                    s_mode = MODE_FREE_MOVE;
-                if (ou->player->isTrackingCharacter())
-                {
-                    DebugLog("[WASDCombat] camera_lock_restore_skipped_already_locked");
-                }
-                else
-                {
-                    ou->player->startTrackCharacter(s_freeMoveAnchor);
-                    DebugLog("[WASDCombat] camera_lock_restored_after_long_stream");
-                }
-                DebugLog("[WASDCombat] dc_restored_after_long_stream");
-            }
-        }
 
-        // Fallback so the load guard cannot stick.
-        if (s_loadGuardActive)
+            s_anchorMovement = s_freeMoveAnchor->movement;
+        }
+        else
         {
-            s_loadGuardActive        = false;
-            s_postLoadReacquire      = true;
-            s_stabilizationCountdown = 0;
-            DebugLog("[WASDCombat] reload_complete_reacquire_started");
+            if (!s_loadGuardActive)
+            {
+                if (!s_dcShutdownInProgress)
+                {
+                    s_dcShutdownInProgress = true;
+                    DebugLog("[WASDCombat] dc_loadgame_shutdown_begin");
+                }
+                s_healingJobActive             = false;
+                s_medicalJobSuppressedThisHold = false;
+                s_freeMoveAnchor               = nullptr;
+                s_anchorMovement               = nullptr;
+                s_selectedCharacter            = nullptr;
+                s_selectedMovement             = nullptr;
+                s_prevAttackTarget             = nullptr;
+                s_savedFreeCameraMode          = false;
+                s_cameraLockInvSuspend         = false;
+                s_cameraLockTurretSuspend      = false;
+                s_savedCamFollowOffY           = 0.0f;
+                s_loadGuardActive = true;
+                clearAllState();
+                s_vHud.label = nullptr;
+                s_vHud.shown = false;
+                s_hudReady   = false;
+                DebugLog("[WASDCombat] dc_loadgame_old_state_cleared");
+                DebugLog("[WASDCombat] load_guard_enabled");
+            }
+            hudUpdate();
+            if (ou && ou->player) s_mainLoopOrig(thisptr, time);
+            return true;
         }
     }
-
-    // newGame() sets NEWGAME (0x4) before world teardown; the LOADGAME (0x2) path sets the flags too late.
+    else if (s_dcPtrLossActive)
     {
-        SaveManager* sm = SaveManager::getSingleton();
-        if (sm && sm->signal == SaveManager::NEWGAME
-            && (s_mode == MODE_FREE_MOVE || s_userWantsDC || s_freeMoveAnchor != nullptr))
+        s_dcPtrLossActive = false;
+        Character* chR = ou->player->selectedCharacter.getCharacter();
+        if (chR && s_userWantsDC)
         {
-            DebugLog("[WASDCombat] dc_newgame_signal_seen");
-            DebugLog("[WASDCombat] dc_newgame_detection_source=mainloop_signal_poll");
-            DebugLog("[WASDCombat] dc_newgame_soft_shutdown_begin");
-
-            s_userWantsDC = false;
-            s_userWantsFP = false;
-
-            // Exit while the camera is valid, or character creation shows no character.
-            if (s_fpActive) exitOTS(true);
-            if (s_firstPersonActive) exitFirstPerson(true);
-            s_fpSuspendedForInv = false;
-            s_otsInvFaceActive = false;
-            s_otsInvFaceChar   = nullptr;
-
-            if (ou->player)
-            {
-                ou->player->stopTrackCharacter();
-                if (ou->player->camera)
-                {
-                    ou->player->camera->setFreeCameraMode(s_savedFreeCameraMode);
-                    ou->player->camera->objectCurrentlyFollowingOffset.y = s_savedCamFollowOffY;
-                }
-            }
-            // Set both modes so the step-3 exit transition does not run again.
-            s_mode          = MODE_VANILLA;
-            s_fmTrackedMode = MODE_VANILLA;
-            DebugLog("[WASDCombat] dc_newgame_forced_vanilla_mode");
-
-            // Clear the pointers before world teardown frees their targets.
-            s_freeMoveAnchor    = nullptr;
-            s_anchorMovement    = nullptr;
-            s_selectedCharacter = nullptr;
-            s_selectedMovement  = nullptr;
-            s_prevAttackTarget  = nullptr;
-
-            s_savedFreeCameraMode     = false;
-            s_savedCamFollowOffY      = 0.0f;
-            s_cameraLockInvSuspend    = false;
-            s_cameraLockTurretSuspend = false;
-            s_menuSuspendActive       = false;
-
-            s_wHeld               = false;
-            s_aHeld               = false;
-            s_sHeld               = false;
-            s_dHeld               = false;
-            s_wasdWasActive       = false;
-            s_wasdMovementApplied = false;
-            s_prevWasdDir         = Ogre::Vector3::ZERO;
-            s_wasdTapStartMs      = 0;
-            s_wasdLastHeldMs      = 0;
-            s_frameMode           = MODE_VANILLA;
-            s_frameWasdHeld       = false;
-
-            s_lootUiSuspendActive  = false;
-            s_lootUiWasPrevOpen    = false;
-            s_lootSuspendStartTick = 0;
-
-            s_healingJobActive             = false;
-            s_healingJobPending            = false;
-            s_medicalJobSuppressedThisHold = false;
-            s_attackCommitmentActive       = false;
-            s_attackCommitmentStart        = 0;
-
-            s_dcPtrLossActive      = false;
-            s_dcPtrLossStartedAt   = 0;
+            DebugLog("[WASDCombat] dc_reacquire_after_long_stream");
+            s_freeMoveAnchor = chR;
+            s_anchorMovement = chR->movement;
             s_dcPtrLossLastLogTick = 0;
-
-            DebugLog("[WASDCombat] dc_newgame_old_state_cleared");
-            DebugLog("[WASDCombat] dc_newgame_soft_shutdown_complete");
-        }
-    }
-
-    {
-        bool anyInvOpen      = gui && gui->isAnyInventoryWindowOpen();
-        int  numInvOpen      = gui ? gui->getNumOpenInventoryWindows() : 0;
-        bool npcFieldOpen    = gui && gui->inventoryWindowNPC.getCharacter()       != nullptr;
-        bool charFieldOpen   = gui && gui->inventoryWindowCharacter.getCharacter() != nullptr;
-        bool traderFieldOpen = gui && gui->inventoryWindowTrader.getCharacter()    != nullptr;
-        bool tradeAOpen      = gui && gui->tradeA.getCharacter()                   != nullptr;
-        bool tradeBOpen      = gui && gui->tradeB.getCharacter()                   != nullptr;
-
-#if LOOT_DIAG
-        if (anyInvOpen && s_mode == MODE_FREE_MOVE)
-        {
-            static ULONGLONG s_invDiagTick = 0;
-            ULONGLONG t = GetTickCount64();
-            if (t - s_invDiagTick >= 1000) { s_invDiagTick = t;
-                DebugLog("[WASDCombat] any_inventory_ui_detected");
-                if (charFieldOpen)
-                    DebugLog("[WASDCombat] player_inventory_ui_detected");
-                if (npcFieldOpen)
-                    DebugLog("[WASDCombat] npc_inventory_ui_detected");
-                if (tradeAOpen || tradeBOpen)
-                    DebugLog("[WASDCombat] unconscious_body_inventory_ui_detected");
-                if (!charFieldOpen && !npcFieldOpen && !traderFieldOpen && !tradeAOpen && !tradeBOpen)
-                    DebugLog("[WASDCombat] loot_ui_detection_failed");
-
-                bool modal = MyGUI::InputManager::getInstance().isModalAny();
-                if (modal) DebugLog("[WASDCombat] current_ui_modal_state");
-
-                char wbuf[256];
-                sprintf_s(wbuf, sizeof(wbuf),
-                    "[WASDCombat] current_ui_window_name open=%d npc=%d char=%d trader=%d tradeA=%d tradeB=%d modal=%d",
-                    numInvOpen, (int)npcFieldOpen, (int)charFieldOpen, (int)traderFieldOpen,
-                    (int)tradeAOpen, (int)tradeBOpen, (int)modal);
-                DebugLog(wbuf);
-
-                MyGUI::Widget* mfocus = MyGUI::InputManager::getInstance().getMouseFocusWidget();
-                if (mfocus)
-                {
-                    char abuf[256];
-                    sprintf_s(abuf, sizeof(abuf),
-                        "[WASDCombat] current_ui_active_widget_name name=%s",
-                        mfocus->getName().c_str());
-                    DebugLog(abuf);
-
-                    MyGUI::Widget* root = mfocus;
-                    while (root->getParent() != nullptr) root = root->getParent();
-                    char rbuf[256];
-                    sprintf_s(rbuf, sizeof(rbuf),
-                        "[WASDCombat] current_ui_root_name name=%s",
-                        root->getName().c_str());
-                    DebugLog(rbuf);
-                }
-            }
-        }
-#endif
-
-        bool moveThrough = invMoveThroughEligible();
-
-        // The trade hook can set the suspension before the window is visible.
-        if (moveThrough)
-        {
-            if (s_lootUiSuspendActive)
+            if (chR->movement && s_dcPreservedSpeedMode < GROUPED)
             {
-                s_lootUiSuspendActive  = false;
-                s_lootSuspendStartTick = 0;
+                chR->movement->setDesiredSpeedOrders(s_dcPreservedSpeedMode);
+                chR->movement->setDesiredSpeed(s_dcPreservedSpeedMode);
             }
-            if (s_cameraLockInvSuspend)
+            if (s_mode != MODE_FREE_MOVE)
+                s_mode = MODE_FREE_MOVE;
+            if (ou->player->isTrackingCharacter())
             {
-                s_cameraLockInvSuspend = false;
-                if (s_freeMoveAnchor && ou->player)
-                    ou->player->startTrackCharacter(s_freeMoveAnchor);
-            }
-            // Undo only auto-pauses inside the grace window; a later pause is the player's.
-            Character* mtShownChar = gui->inventoryWindowCharacter.getCharacter();
-            bool mtOpenEdge   = !s_invMoveThroughActive;
-            bool mtSwitchEdge = s_invMoveThroughActive
-                                && mtShownChar != s_invMoveThroughShownChar;
-            s_invMoveThroughShownChar = mtShownChar;
-            if (mtOpenEdge || mtSwitchEdge)
-            {
-                // No grace re-arm while the player has paused, so their pause is never undone.
-                if (!s_invMoveThroughPlayerPaused)
-                    s_invMoveThroughEdgeTick = GetTickCount64();
-                if (mtSwitchEdge)
-                    DebugLog("[WASDCombat] inv_move_through_switch_edge");
-            }
-            if (ou && ou->isPaused())
-            {
-                if (!s_invMoveThroughPlayerPaused
-                    && s_invMoveThroughEdgeTick != 0
-                    && GetTickCount64() - s_invMoveThroughEdgeTick
-                           <= INV_MT_AUTOPAUSE_GRACE_MS)
-                {
-                    ou->userPause(false);
-                    s_invMoveThroughForcedRun = true;
-                }
-                else if (!s_invMoveThroughPlayerPaused)
-                {
-                    s_invMoveThroughPlayerPaused = true;
-                    DebugLog("[WASDCombat] inv_move_through_player_pause_respected");
-                }
-            }
-            else if (s_invMoveThroughPlayerPaused)
-            {
-                s_invMoveThroughPlayerPaused = false;
-                DebugLog("[WASDCombat] inv_move_through_player_unpause");
-            }
-            if (!s_invMoveThroughActive)
-            {
-                s_invMoveThroughActive = true;
-                DebugLog("[WASDCombat] inv_move_through_begin");
-            }
-            s_lootUiWasPrevOpen = true;
-
-            // Vanilla never closes a merchant trade on distance; own-squad trades must not auto-close.
-            Character* trader = gui->inventoryWindowTrader.getCharacter();
-            if (trader && !trader->isPlayerCharacter() && !s_invTradeCloseRequested)
-            {
-                Ogre::Vector3 ap = s_freeMoveAnchor->getPosition();
-                if (!s_invTradeStartValid)
-                {
-                    s_invTradeAnchorStart = ap;
-                    s_invTradeStartValid  = true;
-                }
-                else
-                {
-                    float dx = ap.x - s_invTradeAnchorStart.x;
-                    float dz = ap.z - s_invTradeAnchorStart.z;
-                    if (dx * dx + dz * dz > INV_TRADE_AUTOCLOSE_DIST_SQ)
-                    {
-                        gui->closeTradeWindow();
-                        s_invTradeCloseRequested = true;
-                        DebugLog("[WASDCombat] inv_trade_autoclosed_distance");
-                    }
-                }
-            }
-        }
-        else if (s_invMoveThroughActive)
-        {
-            // Leave the game running: the player owns pause now.
-            s_invMoveThroughActive    = false;
-            s_invMoveThroughForcedRun = false;
-            s_invMoveThroughPlayerPaused = false;
-            s_invMoveThroughShownChar    = nullptr;
-            s_invMoveThroughEdgeTick     = 0;
-            s_invTradeCloseRequested  = false;
-            s_invTradeStartValid      = false;
-            s_tradeWindowActive       = false;
-            s_lootUiWasPrevOpen       = false;
-            s_lootUiSuspendActive     = false;
-            s_lootSuspendStartTick    = 0;
-            DebugLog("[WASDCombat] inv_move_through_end");
-        }
-        else if (anyInvOpen && !s_lootUiWasPrevOpen)
-        {
-            // Non-trade paths such as showInventoryNPC do not set the suspension in the hook.
-            if (!s_lootUiSuspendActive)
-            {
-                s_lootUiSuspendActive  = true;
-                s_lootSuspendStartTick = GetTickCount64();
-            }
-            // Do not re-derive s_tradeWindowActive from the gui trade fields: they stay stale after close.
-            s_lootUiWasPrevOpen = true;
-            DebugLog("[WASDCombat] loot_ui_open_suspend_vmode");
-            if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && !s_cameraLockInvSuspend)
-            {
-                s_cameraLockInvSuspend = true;
-                DebugLog("[WASDCombat] camera_lock_suspended_inventory_open");
-            }
-        }
-        else if (!anyInvOpen && s_lootUiWasPrevOpen)
-        {
-            // Clear the trade latch before the debounce so the next own inventory is not a trade.
-            s_tradeWindowActive = false;
-            ULONGLONG elapsed = GetTickCount64() - s_lootSuspendStartTick;
-            if (elapsed >= LOOT_SUSPEND_DEBOUNCE_MS)
-            {
-                s_lootUiSuspendActive = false;
-                s_lootUiWasPrevOpen   = false;
-                DebugLog("[WASDCombat] loot_ui_closed_restore_vmode");
-                if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && s_cameraLockInvSuspend && ou->player)
-                {
-                    s_cameraLockInvSuspend = false;
-                    DebugLog("[WASDCombat] camera_lock_restored_after_inventory");
-                    ou->player->startTrackCharacter(s_freeMoveAnchor);
-                }
+                DebugLog("[WASDCombat] camera_lock_restore_skipped_already_locked");
             }
             else
             {
-#if LOOT_DIAG
-                static ULONGLONG s_debBlockTick = 0;
-                ULONGLONG t = GetTickCount64();
-                if (t - s_debBlockTick >= 100) { s_debBlockTick = t;
-                    DebugLog("[WASDCombat] duplicate_initial_loot_open_blocked"); }
-#endif
-            }
-        }
-        else if (s_lootUiSuspendActive && !s_lootUiWasPrevOpen && s_lootSuspendStartTick > 0)
-        {
-            // The hook fired but no window opened; release after 1 s so the suspension cannot stick.
-            ULONGLONG elapsed = GetTickCount64() - s_lootSuspendStartTick;
-            if (elapsed >= 1000)
-            {
-                s_lootUiSuspendActive  = false;
-                s_lootSuspendStartTick = 0;
-                s_tradeWindowActive    = false;
-            }
-        }
-    }
-
-    // A reload can lose the anchor while DC stays on; take it again from the selection.
-    if (s_mode == MODE_FREE_MOVE && !s_lootUiSuspendActive && !s_freeMoveAnchor
-        && !s_dcShutdownInProgress && !s_loadGuardActive && ou && ou->player)
-    {
-        Character* sel = s_selectedCharacter;
-        if (sel && sel->movement && sel->isPlayerCharacter())
-        {
-            s_freeMoveAnchor = sel;
-            s_anchorMovement = sel->movement;
-            ou->player->startTrackCharacter(s_freeMoveAnchor);
-            DebugLog("[WASDCombat] dc_anchor_reacquired_selfheal");
-        }
-    }
-
-    if (s_fpActive && !isOwnInventoryOpen())
-        exitOTS(true);
-
-    // Registered here: the game loads its keyboard config before RE_Kenshi loads plugins.
-    if (!s_nativeCommandsRegistered)
-        registerNativeCommands(key);
-
-    if (s_nativeCommandsRegistered)
-        watchNativeBindChanges();
-
-    // Hooks read these snapshots, not the volatiles, to avoid a fence on 100+ calls per frame.
-    s_frameMode        = s_mode;
-    s_frameWasdHeld    = s_wHeld || s_aHeld || s_sHeld || s_dHeld;
-    s_frameLootSuspend = s_lootUiSuspendActive;
-
-    // 2. Selection tracking.
-    {
-        Character*    ch = ou->player->selectedCharacter.getCharacter();
-        CharMovement* mv = ch ? ch->movement : nullptr;
-        if (ch != s_selectedCharacter || mv != s_selectedMovement)
-        {
-            s_selectedCharacter = ch;
-            s_selectedMovement  = mv;
-        }
-
-        if (s_postLoadReacquire && ch)
-        {
-            s_postLoadReacquire = false;
-            DebugLog("[WASDCombat] reload_reacquire_complete");
-            if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor)
-            {
-                DebugLog("[WASDCombat] camera_lock_retarget_after_load");
                 ou->player->startTrackCharacter(s_freeMoveAnchor);
+                DebugLog("[WASDCombat] camera_lock_restored_after_long_stream");
             }
+            DebugLog("[WASDCombat] dc_restored_after_long_stream");
         }
     }
 
-    // 3. V-Mode transition.
-    { LONGLONG _clStart = qpcNow();
+    // Fallback so the load guard cannot stick.
+    if (s_loadGuardActive)
     {
-        ControlMode curMode = s_mode;
-        bool curInVM  = (curMode         == MODE_FREE_MOVE);
-        bool prevInVM = (s_fmTrackedMode == MODE_FREE_MOVE);
+        s_loadGuardActive        = false;
+        s_postLoadReacquire      = true;
+        s_stabilizationCountdown = 0;
+        DebugLog("[WASDCombat] reload_complete_reacquire_started");
+    }
+    return false;
+}
 
-        if (curInVM && !prevInVM && !s_lootUiSuspendActive)
-        {
-            s_freeMoveAnchor      = s_selectedCharacter;
-            s_anchorMovement      = s_freeMoveAnchor ? s_freeMoveAnchor->movement : nullptr;
-            s_wasdWasActive       = false;
-            s_combatWASDLogged    = false;
-            s_retreatLogged       = false;
-            s_squadThreat         = false;
-            s_consciousAllyThreat = false;
-            s_enemyTargetingLogged = false;
-            s_lastScanTick        = 0;
-            // A fresh V-mode stays vanilla until the first WASD release; a point-click order continues.
-            s_wasdHoldActive         = false;
-            s_playerPointClickActive = false;
-            s_holdPosValid           = false;
-            s_idleHoldEngaged        = false;
-            s_camRotateToggle        = false;
+static void mlHandleNewGameSignal()
+{
+    SaveManager* sm = SaveManager::getSingleton();
+    if (sm && sm->signal == SaveManager::NEWGAME
+        && (s_mode == MODE_FREE_MOVE || s_userWantsDC || s_freeMoveAnchor != nullptr))
+    {
+        DebugLog("[WASDCombat] dc_newgame_signal_seen");
+        DebugLog("[WASDCombat] dc_newgame_detection_source=mainloop_signal_poll");
+        DebugLog("[WASDCombat] dc_newgame_soft_shutdown_begin");
 
-            if (s_freeMoveAnchor && ou->player->camera)
-            {
-                s_savedFreeCameraMode = ou->player->camera->isFreeCameraMode();
-                DebugLog("[WASDCombat] camera_mode_saved");
-                ou->player->camera->setFreeCameraMode(false);
-                ou->player->startTrackCharacter(s_freeMoveAnchor);
-                s_savedCamFollowOffY = ou->player->camera->objectCurrentlyFollowingOffset.y;
-                DebugLog("[WASDCombat] camera_lock_enabled_dc");
-            }
-            ou->showPlayerAMessage("Direct Control Enabled", false);
-        }
-        else if (!curInVM && prevInVM && !s_lootUiSuspendActive)
+        s_userWantsDC = false;
+        s_userWantsFP = false;
+
+        // Exit while the camera is valid, or character creation shows no character.
+        if (s_fpActive) exitOTS(true);
+        if (s_firstPersonActive) exitFirstPerson(true);
+        s_fpSuspendedForInv = false;
+        s_otsInvFaceActive = false;
+        s_otsInvFaceChar   = nullptr;
+
+        if (ou->player)
         {
-            // Exit OTS first so the camera re-attaches to the rig while the anchor is still valid.
-            if (s_fpActive) exitOTS(true);
-            if (s_firstPersonActive) exitFirstPerson(true);
-            s_fpSuspendedForInv = false;
             ou->player->stopTrackCharacter();
             if (ou->player->camera)
             {
                 ou->player->camera->setFreeCameraMode(s_savedFreeCameraMode);
                 ou->player->camera->objectCurrentlyFollowingOffset.y = s_savedCamFollowOffY;
             }
-            s_savedFreeCameraMode     = false;
-            s_savedCamFollowOffY      = 0.0f;
-            s_cameraLockInvSuspend    = false;
-            s_cameraLockTurretSuspend = false;
-            // Clear the forced rotate flag, or the camera keeps rotating in vanilla mode.
-            s_camRotateToggle         = false;
-            if (key) key->rotate      = false;
-            DebugLog("[WASDCombat] camera_lock_disabled_restore_freecam");
-            s_freeMoveAnchor        = nullptr;
-            s_anchorMovement      = nullptr;
-            s_wasdWasActive       = false;
+        }
+        // Set both modes so the step-3 exit transition does not run again.
+        s_mode          = MODE_VANILLA;
+        s_fmTrackedMode = MODE_VANILLA;
+        DebugLog("[WASDCombat] dc_newgame_forced_vanilla_mode");
+
+        // Clear the pointers before world teardown frees their targets.
+        s_freeMoveAnchor    = nullptr;
+        s_anchorMovement    = nullptr;
+        s_selectedCharacter = nullptr;
+        s_selectedMovement  = nullptr;
+        s_prevAttackTarget  = nullptr;
+
+        s_savedFreeCameraMode     = false;
+        s_savedCamFollowOffY      = 0.0f;
+        s_cameraLockInvSuspend    = false;
+        s_cameraLockTurretSuspend = false;
+        s_menuSuspendActive       = false;
+
+        s_wHeld               = false;
+        s_aHeld               = false;
+        s_sHeld               = false;
+        s_dHeld               = false;
+        s_wasdWasActive       = false;
+        s_wasdMovementApplied = false;
+        s_prevWasdDir         = Ogre::Vector3::ZERO;
+        s_wasdTapStartMs      = 0;
+        s_wasdLastHeldMs      = 0;
+        s_frameMode           = MODE_VANILLA;
+        s_frameWasdHeld       = false;
+
+        s_lootUiSuspendActive  = false;
+        s_lootUiWasPrevOpen    = false;
+        s_lootSuspendStartTick = 0;
+
+        s_healingJobActive             = false;
+        s_healingJobPending            = false;
+        s_medicalJobSuppressedThisHold = false;
+        s_attackCommitmentActive       = false;
+        s_attackCommitmentStart        = 0;
+
+        s_dcPtrLossActive      = false;
+        s_dcPtrLossStartedAt   = 0;
+        s_dcPtrLossLastLogTick = 0;
+
+        DebugLog("[WASDCombat] dc_newgame_old_state_cleared");
+        DebugLog("[WASDCombat] dc_newgame_soft_shutdown_complete");
+    }
+}
+
+static void mlRunInventoryMoveThrough()
+{
+    if (s_lootUiSuspendActive)
+    {
+        s_lootUiSuspendActive  = false;
+        s_lootSuspendStartTick = 0;
+    }
+    if (s_cameraLockInvSuspend)
+    {
+        s_cameraLockInvSuspend = false;
+        if (s_freeMoveAnchor && ou->player)
+            ou->player->startTrackCharacter(s_freeMoveAnchor);
+    }
+    // Undo only auto-pauses inside the grace window; a later pause is the player's.
+    Character* mtShownChar = gui->inventoryWindowCharacter.getCharacter();
+    bool mtOpenEdge   = !s_invMoveThroughActive;
+    bool mtSwitchEdge = s_invMoveThroughActive
+                        && mtShownChar != s_invMoveThroughShownChar;
+    s_invMoveThroughShownChar = mtShownChar;
+    if (mtOpenEdge || mtSwitchEdge)
+    {
+        // No grace re-arm while the player has paused, so their pause is never undone.
+        if (!s_invMoveThroughPlayerPaused)
+            s_invMoveThroughEdgeTick = GetTickCount64();
+        if (mtSwitchEdge)
+            DebugLog("[WASDCombat] inv_move_through_switch_edge");
+    }
+    if (ou && ou->isPaused())
+    {
+        if (!s_invMoveThroughPlayerPaused
+            && s_invMoveThroughEdgeTick != 0
+            && GetTickCount64() - s_invMoveThroughEdgeTick
+                   <= INV_MT_AUTOPAUSE_GRACE_MS)
+        {
+            ou->userPause(false);
+            s_invMoveThroughForcedRun = true;
+        }
+        else if (!s_invMoveThroughPlayerPaused)
+        {
+            s_invMoveThroughPlayerPaused = true;
+            DebugLog("[WASDCombat] inv_move_through_player_pause_respected");
+        }
+    }
+    else if (s_invMoveThroughPlayerPaused)
+    {
+        s_invMoveThroughPlayerPaused = false;
+        DebugLog("[WASDCombat] inv_move_through_player_unpause");
+    }
+    if (!s_invMoveThroughActive)
+    {
+        s_invMoveThroughActive = true;
+        DebugLog("[WASDCombat] inv_move_through_begin");
+    }
+    s_lootUiWasPrevOpen = true;
+
+    // Vanilla never closes a merchant trade on distance; own-squad trades must not auto-close.
+    Character* trader = gui->inventoryWindowTrader.getCharacter();
+    if (trader && !trader->isPlayerCharacter() && !s_invTradeCloseRequested)
+    {
+        Ogre::Vector3 ap = s_freeMoveAnchor->getPosition();
+        if (!s_invTradeStartValid)
+        {
+            s_invTradeAnchorStart = ap;
+            s_invTradeStartValid  = true;
+        }
+        else
+        {
+            float dx = ap.x - s_invTradeAnchorStart.x;
+            float dz = ap.z - s_invTradeAnchorStart.z;
+            if (dx * dx + dz * dz > INV_TRADE_AUTOCLOSE_DIST_SQ)
+            {
+                gui->closeTradeWindow();
+                s_invTradeCloseRequested = true;
+                DebugLog("[WASDCombat] inv_trade_autoclosed_distance");
+            }
+        }
+    }
+}
+
+static void mlTrackInventoryWindows()
+{
+    bool anyInvOpen      = gui && gui->isAnyInventoryWindowOpen();
+    int  numInvOpen      = gui ? gui->getNumOpenInventoryWindows() : 0;
+    bool npcFieldOpen    = gui && gui->inventoryWindowNPC.getCharacter()       != nullptr;
+    bool charFieldOpen   = gui && gui->inventoryWindowCharacter.getCharacter() != nullptr;
+    bool traderFieldOpen = gui && gui->inventoryWindowTrader.getCharacter()    != nullptr;
+    bool tradeAOpen      = gui && gui->tradeA.getCharacter()                   != nullptr;
+    bool tradeBOpen      = gui && gui->tradeB.getCharacter()                   != nullptr;
+
+#if LOOT_DIAG
+    if (anyInvOpen && s_mode == MODE_FREE_MOVE)
+    {
+        static ULONGLONG s_invDiagTick = 0;
+        ULONGLONG t = GetTickCount64();
+        if (t - s_invDiagTick >= 1000) { s_invDiagTick = t;
+            DebugLog("[WASDCombat] any_inventory_ui_detected");
+            if (charFieldOpen)
+                DebugLog("[WASDCombat] player_inventory_ui_detected");
+            if (npcFieldOpen)
+                DebugLog("[WASDCombat] npc_inventory_ui_detected");
+            if (tradeAOpen || tradeBOpen)
+                DebugLog("[WASDCombat] unconscious_body_inventory_ui_detected");
+            if (!charFieldOpen && !npcFieldOpen && !traderFieldOpen && !tradeAOpen && !tradeBOpen)
+                DebugLog("[WASDCombat] loot_ui_detection_failed");
+
+            bool modal = MyGUI::InputManager::getInstance().isModalAny();
+            if (modal) DebugLog("[WASDCombat] current_ui_modal_state");
+
+            char wbuf[256];
+            sprintf_s(wbuf, sizeof(wbuf),
+                "[WASDCombat] current_ui_window_name open=%d npc=%d char=%d trader=%d tradeA=%d tradeB=%d modal=%d",
+                numInvOpen, (int)npcFieldOpen, (int)charFieldOpen, (int)traderFieldOpen,
+                (int)tradeAOpen, (int)tradeBOpen, (int)modal);
+            DebugLog(wbuf);
+
+            MyGUI::Widget* mfocus = MyGUI::InputManager::getInstance().getMouseFocusWidget();
+            if (mfocus)
+            {
+                char abuf[256];
+                sprintf_s(abuf, sizeof(abuf),
+                    "[WASDCombat] current_ui_active_widget_name name=%s",
+                    mfocus->getName().c_str());
+                DebugLog(abuf);
+
+                MyGUI::Widget* root = mfocus;
+                while (root->getParent() != nullptr) root = root->getParent();
+                char rbuf[256];
+                sprintf_s(rbuf, sizeof(rbuf),
+                    "[WASDCombat] current_ui_root_name name=%s",
+                    root->getName().c_str());
+                DebugLog(rbuf);
+            }
+        }
+    }
+#endif
+
+    bool moveThrough = invMoveThroughEligible();
+
+    // The trade hook can set the suspension before the window is visible.
+    if (moveThrough)
+    {
+        mlRunInventoryMoveThrough();
+    }
+    else if (s_invMoveThroughActive)
+    {
+        // Leave the game running: the player owns pause now.
+        s_invMoveThroughActive    = false;
+        s_invMoveThroughForcedRun = false;
+        s_invMoveThroughPlayerPaused = false;
+        s_invMoveThroughShownChar    = nullptr;
+        s_invMoveThroughEdgeTick     = 0;
+        s_invTradeCloseRequested  = false;
+        s_invTradeStartValid      = false;
+        s_tradeWindowActive       = false;
+        s_lootUiWasPrevOpen       = false;
+        s_lootUiSuspendActive     = false;
+        s_lootSuspendStartTick    = 0;
+        DebugLog("[WASDCombat] inv_move_through_end");
+    }
+    else if (anyInvOpen && !s_lootUiWasPrevOpen)
+    {
+        // Non-trade paths such as showInventoryNPC do not set the suspension in the hook.
+        if (!s_lootUiSuspendActive)
+        {
+            s_lootUiSuspendActive  = true;
+            s_lootSuspendStartTick = GetTickCount64();
+        }
+        // Do not re-derive s_tradeWindowActive from the gui trade fields: they stay stale after close.
+        s_lootUiWasPrevOpen = true;
+        DebugLog("[WASDCombat] loot_ui_open_suspend_vmode");
+        if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && !s_cameraLockInvSuspend)
+        {
+            s_cameraLockInvSuspend = true;
+            DebugLog("[WASDCombat] camera_lock_suspended_inventory_open");
+        }
+    }
+    else if (!anyInvOpen && s_lootUiWasPrevOpen)
+    {
+        // Clear the trade latch before the debounce so the next own inventory is not a trade.
+        s_tradeWindowActive = false;
+        ULONGLONG elapsed = GetTickCount64() - s_lootSuspendStartTick;
+        if (elapsed >= LOOT_SUSPEND_DEBOUNCE_MS)
+        {
+            s_lootUiSuspendActive = false;
+            s_lootUiWasPrevOpen   = false;
+            DebugLog("[WASDCombat] loot_ui_closed_restore_vmode");
+            if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && s_cameraLockInvSuspend && ou->player)
+            {
+                s_cameraLockInvSuspend = false;
+                DebugLog("[WASDCombat] camera_lock_restored_after_inventory");
+                ou->player->startTrackCharacter(s_freeMoveAnchor);
+            }
+        }
+        else
+        {
+#if LOOT_DIAG
+            static ULONGLONG s_debBlockTick = 0;
+            ULONGLONG t = GetTickCount64();
+            if (t - s_debBlockTick >= 100) { s_debBlockTick = t;
+                DebugLog("[WASDCombat] duplicate_initial_loot_open_blocked"); }
+#endif
+        }
+    }
+    else if (s_lootUiSuspendActive && !s_lootUiWasPrevOpen && s_lootSuspendStartTick > 0)
+    {
+        // The hook fired but no window opened; release after 1 s so the suspension cannot stick.
+        ULONGLONG elapsed = GetTickCount64() - s_lootSuspendStartTick;
+        if (elapsed >= 1000)
+        {
+            s_lootUiSuspendActive  = false;
+            s_lootSuspendStartTick = 0;
+            s_tradeWindowActive    = false;
+        }
+    }
+}
+
+static void mlTrackSelection()
+{
+    Character*    ch = ou->player->selectedCharacter.getCharacter();
+    CharMovement* mv = ch ? ch->movement : nullptr;
+    if (ch != s_selectedCharacter || mv != s_selectedMovement)
+    {
+        s_selectedCharacter = ch;
+        s_selectedMovement  = mv;
+    }
+
+    if (s_postLoadReacquire && ch)
+    {
+        s_postLoadReacquire = false;
+        DebugLog("[WASDCombat] reload_reacquire_complete");
+        if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor)
+        {
+            DebugLog("[WASDCombat] camera_lock_retarget_after_load");
+            ou->player->startTrackCharacter(s_freeMoveAnchor);
+        }
+    }
+}
+
+static void mlApplyModeTransition()
+{
+    ControlMode curMode = s_mode;
+    bool curInVM  = (curMode         == MODE_FREE_MOVE);
+    bool prevInVM = (s_fmTrackedMode == MODE_FREE_MOVE);
+
+    if (curInVM && !prevInVM && !s_lootUiSuspendActive)
+    {
+        s_freeMoveAnchor      = s_selectedCharacter;
+        s_anchorMovement      = s_freeMoveAnchor ? s_freeMoveAnchor->movement : nullptr;
+        s_wasdWasActive       = false;
+        s_combatWASDLogged    = false;
+        s_retreatLogged       = false;
+        s_squadThreat         = false;
+        s_consciousAllyThreat = false;
+        s_enemyTargetingLogged = false;
+        s_lastScanTick        = 0;
+        // A fresh V-mode stays vanilla until the first WASD release; a point-click order continues.
+        s_wasdHoldActive         = false;
+        s_playerPointClickActive = false;
+        s_holdPosValid           = false;
+        s_idleHoldEngaged        = false;
+        s_camRotateToggle        = false;
+
+        if (s_freeMoveAnchor && ou->player->camera)
+        {
+            s_savedFreeCameraMode = ou->player->camera->isFreeCameraMode();
+            DebugLog("[WASDCombat] camera_mode_saved");
+            ou->player->camera->setFreeCameraMode(false);
+            ou->player->startTrackCharacter(s_freeMoveAnchor);
+            s_savedCamFollowOffY = ou->player->camera->objectCurrentlyFollowingOffset.y;
+            DebugLog("[WASDCombat] camera_lock_enabled_dc");
+        }
+        ou->showPlayerAMessage("Direct Control Enabled", false);
+    }
+    else if (!curInVM && prevInVM && !s_lootUiSuspendActive)
+    {
+        // Exit OTS first so the camera re-attaches to the rig while the anchor is still valid.
+        if (s_fpActive) exitOTS(true);
+        if (s_firstPersonActive) exitFirstPerson(true);
+        s_fpSuspendedForInv = false;
+        ou->player->stopTrackCharacter();
+        if (ou->player->camera)
+        {
+            ou->player->camera->setFreeCameraMode(s_savedFreeCameraMode);
+            ou->player->camera->objectCurrentlyFollowingOffset.y = s_savedCamFollowOffY;
+        }
+        s_savedFreeCameraMode     = false;
+        s_savedCamFollowOffY      = 0.0f;
+        s_cameraLockInvSuspend    = false;
+        s_cameraLockTurretSuspend = false;
+        // Clear the forced rotate flag, or the camera keeps rotating in vanilla mode.
+        s_camRotateToggle         = false;
+        if (key) key->rotate      = false;
+        DebugLog("[WASDCombat] camera_lock_disabled_restore_freecam");
+        s_freeMoveAnchor        = nullptr;
+        s_anchorMovement      = nullptr;
+        s_wasdWasActive       = false;
+        s_combatWASDLogged    = false;
+        s_retreatLogged       = false;
+        s_squadThreat         = false;
+        s_consciousAllyThreat = false;
+        s_enemyTargetingLogged = false;
+        s_lastScanTick        = 0;
+        s_wasdHoldActive         = false;
+        s_playerPointClickActive = false;
+        s_holdPosValid           = false;
+        s_idleHoldEngaged        = false;
+        ou->showPlayerAMessage("Direct Control Disabled", false);
+    }
+    else if (curInVM && s_freeMoveAnchor && !s_lootUiSuspendActive)
+    {
+        Character* sel = s_selectedCharacter;
+        // A single click only selects, so NPCs can be inspected (Sentient Sands compatibility).
+        ULONGLONG dcMs       = s_lmbDoubleClickMs;
+        bool      dcSwitch   = (dcMs > 0 && (GetTickCount64() - dcMs) <= 600);
+        bool      fSwitch    = s_fSelectEdge;
+        bool      wantSwitch = dcSwitch || fSwitch;
+        if (wantSwitch && sel && sel != s_freeMoveAnchor && sel->isPlayerCharacter())
+        {
+            s_lmbDoubleClickMs    = 0;
+            s_fSelectEdge         = false;
+            // Head hiding acts on the current anchor: restore the old one before the switch.
+            if (s_firstPersonActive && s_fpHeadBoneHidden)
+                fpSetHeadBoneHidden(false);
+            if (s_firstPersonActive && s_fpHairHidden)
+            {
+                AppearanceBase* apOld = s_freeMoveAnchor->getAppearance();
+                if (apOld) apOld->shaveHead(false);
+                s_fpHairHidden = false;
+                DebugLog("[WASDCombat] dc_fp_hair_restored_on_switch");
+            }
+            s_freeMoveAnchor      = sel;
+            s_anchorMovement      = sel->movement;
             s_combatWASDLogged    = false;
             s_retreatLogged       = false;
             s_squadThreat         = false;
             s_consciousAllyThreat = false;
             s_enemyTargetingLogged = false;
-            s_lastScanTick        = 0;
+            s_lastScanTick          = 0;
             s_wasdHoldActive         = false;
             s_playerPointClickActive = false;
             s_holdPosValid           = false;
             s_idleHoldEngaged        = false;
-            ou->showPlayerAMessage("Direct Control Disabled", false);
+            DebugLog(fSwitch ? "[WASDCombat] camera_lock_retarget_selection_fkey"
+                             : "[WASDCombat] camera_lock_retarget_selection_doubleclick");
+            ou->player->startTrackCharacter(s_freeMoveAnchor);
+            if (s_firstPersonActive && s_fpHideHead)
+                fpSetHeadBoneHidden(true);
+            if (s_firstPersonActive && s_fpHideHair)
+            {
+                AppearanceBase* apNew = s_freeMoveAnchor->getAppearance();
+                if (apNew) { apNew->shaveHead(true); s_fpHairHidden = true;
+                    DebugLog("[WASDCombat] dc_fp_hair_hidden_on_switch"); }
+            }
         }
-        else if (curInVM && s_freeMoveAnchor && !s_lootUiSuspendActive)
+        else if (fSwitch)
         {
-            Character* sel = s_selectedCharacter;
-            // A single click only selects, so NPCs can be inspected (Sentient Sands compatibility).
-            ULONGLONG dcMs       = s_lmbDoubleClickMs;
-            bool      dcSwitch   = (dcMs > 0 && (GetTickCount64() - dcMs) <= 600);
-            bool      fSwitch    = s_fSelectEdge;
-            bool      wantSwitch = dcSwitch || fSwitch;
-            if (wantSwitch && sel && sel != s_freeMoveAnchor && sel->isPlayerCharacter())
-            {
-                s_lmbDoubleClickMs    = 0;
-                s_fSelectEdge         = false;
-                // Head hiding acts on the current anchor: restore the old one before the switch.
-                if (s_firstPersonActive && s_fpHeadBoneHidden)
-                    fpSetHeadBoneHidden(false);
-                if (s_firstPersonActive && s_fpHairHidden)
-                {
-                    AppearanceBase* apOld = s_freeMoveAnchor->getAppearance();
-                    if (apOld) apOld->shaveHead(false);
-                    s_fpHairHidden = false;
-                    DebugLog("[WASDCombat] dc_fp_hair_restored_on_switch");
-                }
-                s_freeMoveAnchor      = sel;
-                s_anchorMovement      = sel->movement;
-                s_combatWASDLogged    = false;
-                s_retreatLogged       = false;
-                s_squadThreat         = false;
-                s_consciousAllyThreat = false;
-                s_enemyTargetingLogged = false;
-                s_lastScanTick          = 0;
-                s_wasdHoldActive         = false;
-                s_playerPointClickActive = false;
-                s_holdPosValid           = false;
-                s_idleHoldEngaged        = false;
-                DebugLog(fSwitch ? "[WASDCombat] camera_lock_retarget_selection_fkey"
-                                 : "[WASDCombat] camera_lock_retarget_selection_doubleclick");
-                ou->player->startTrackCharacter(s_freeMoveAnchor);
-                if (s_firstPersonActive && s_fpHideHead)
-                    fpSetHeadBoneHidden(true);
-                if (s_firstPersonActive && s_fpHideHair)
-                {
-                    AppearanceBase* apNew = s_freeMoveAnchor->getAppearance();
-                    if (apNew) { apNew->shaveHead(true); s_fpHairHidden = true;
-                        DebugLog("[WASDCombat] dc_fp_hair_hidden_on_switch"); }
-                }
-            }
-            else if (fSwitch)
-            {
-                // No valid target: consume the edge so it cannot fire on a later frame.
-                s_fSelectEdge = false;
-            }
+            // No valid target: consume the edge so it cannot fire on a later frame.
+            s_fSelectEdge = false;
         }
-        s_fmTrackedMode = curMode;
     }
+    s_fmTrackedMode = curMode;
+}
 
-    // The poll thread must never touch the camera, so the P edge is consumed here.
+static void mlConsumeFirstPersonToggle()
+{
     if (s_fpToggleRequested)
     {
         s_fpToggleRequested = false;
@@ -753,8 +717,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         DebugLog("[WASDCombat] fp_reentered_after_load");
         enterFirstPerson();
     }
+}
 
-    // setStealthMode alone leaves the SNEAK button off, so drive the button's own handler.
+static void mlConsumeSneakToggle()
+{
     if (s_sneakToggleRequested)
     {
         s_sneakToggleRequested = false;
@@ -778,8 +744,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             DebugLog(sbuf);
         }
     }
+}
 
-    // Feeds the FP clip clearance in fpDriveFrame.
+static void mlScanNearestEnemyForFp(GameWorld* thisptr)
+{
     s_fpEnemyNearestDist = -1.0f;
     if (s_firstPersonActive && s_fpEnemyClearRadius > 0.0f
         && s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && s_freeMoveAnchor->movement
@@ -807,7 +775,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         if (best2 >= 0.0f)
             s_fpEnemyNearestDist = sqrtf(best2);
     }
+}
 
+static void mlUpdateTurretSuspend()
+{
     if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && !s_lootUiSuspendActive && ou->player)
     {
         bool atTurret = isUsingStationaryTurret(s_freeMoveAnchor);
@@ -823,7 +794,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             ou->player->startTrackCharacter(s_freeMoveAnchor);
         }
     }
-    // Inventory auto-pause is excluded: the loot suspension owns it.
+}
+
+static void mlUpdateMenuSuspend()
+{
     if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor)
     {
         bool inventoryPausing = s_lootUiSuspendActive || (gui && gui->isAnyInventoryWindowOpen());
@@ -864,6 +838,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                 DebugLog("[WASDCombat] dc_menu_suspend_skipped_inventory_pause"); } }
           else { s_skipLogged = false; } }
     }
+}
+
+static void mlApplyCloseZoomOffset()
+{
     if (s_mode == MODE_FREE_MOVE && g_dcCam.dcCameraCloseZoomChestOffset && !s_fpActive && !s_firstPersonActive &&
         s_freeMoveAnchor && !s_lootUiSuspendActive && ou->player && ou->player->camera)
     {
@@ -876,12 +854,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         float scl = 1.0f - (t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t));
         cam->objectCurrentlyFollowingOffset.y = s_savedCamFollowOffY + g_dcCam.dcCameraFocusOffsetY * scl;
     }
-    s_prof_cameraLock += qpcNow() - _clStart; }   // end camera-lock timer
+}
 
-    // 4. HUD.
-    hudUpdate();
-
-    // 5. Pre-AI WASD application.
+static void mlApplyPreAiWasd()
+{
     if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && s_freeMoveAnchor->movement && !s_lootUiSuspendActive)
     {
         if (s_healingJobPending && !(s_wHeld || s_aHeld || s_sHeld || s_dHeld))
@@ -988,11 +964,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             }
         }
     }
+}
 
-    // 6. Original game loop: AI, CharMovement::update, and CombatClass::go.
-    s_retreatLockGoSuppressed = false;
-
-    // Also drive the FP camera here: the foliage pass samples the camera before CameraClass::update.
+static void mlDriveFpCameraBeforeLoop()
+{
     if (s_fpCamPreOrig && s_firstPersonActive && ou && ou->player && ou->player->camera
         && s_freeMoveAnchor && s_freeMoveAnchor->movement && s_mode == MODE_FREE_MOVE
         && !ou->isLoadingFromASaveGame())
@@ -1003,10 +978,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                                  || gui->isPaused() || gui->isAnyInventoryWindowOpen()));
         fpDriveFrame(ou->player->camera, uiEarly);
     }
+}
 
-    s_mainLoopOrig(thisptr, time);
-
-    // Post-loop load guard.
+static bool mlPostLoopLoadGuard()
+{
     if (!ou || !ou->player || ou->isLoadingFromASaveGame())
     {
         // A null player without the load flag is a microload, so DC stays.
@@ -1053,7 +1028,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                 if (hardLoss)
                     DebugLog("[WASDCombat] dc_loadgame_shutdown_complete");
             }
-            return;
+            return true;
         }
 
         // Chunk-travel microload: keep DC and skip the post-AI steps.
@@ -1063,13 +1038,13 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             if (nowSk - s_skipLogTick >= 2000) { s_skipLogTick = nowSk;
                 DebugLog("[WASDCombat] dc_shutdown_skipped_microload"); }
         }
-        return;
+        return true;
     }
+    return false;
+}
 
-    if (s_dcShutdownInProgress)
-        return;
-
-// 8. Periodic squad-threat scan.
+static void mlScanSquadThreat(GameWorld* thisptr)
+{
     if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor)
     {
         ULONGLONG nowMs   = GetTickCount64();
@@ -1210,32 +1185,28 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             s_prevTargetInRange = curInRange;
         }
     }
+}
 
-    // 9. Post-AI WASD re-application and instant stop.
-    if (!(s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && s_freeMoveAnchor->movement) || s_lootUiSuspendActive)
+static void mlCancelWasdWhileInactive()
+{
+    // A live crawl order must not keep moving the character into a menu or suspend.
+    if (s_wasdDownedMovementActive
+        && s_freeMoveAnchor && s_freeMoveAnchor->movement)
     {
-        // A live crawl order must not keep moving the character into a menu or suspend.
-        if (s_wasdDownedMovementActive
-            && s_freeMoveAnchor && s_freeMoveAnchor->movement)
-        {
-            s_freeMoveAnchor->playerMoveOrderDefault(
-                nullptr, nullptr, s_freeMoveAnchor->movement->pos);
-            s_freeMoveAnchor->movement->halt();
-            s_wasdDownedMovementActive = false;
-            DebugLog("[WASDCombat] dc_downed_crawl_cancelled_on_suspend");
-        }
-        s_wasdWasActive    = false;
-        s_combatWASDLogged = false;
-        s_retreatLogged    = false;
-        s_rmbPressedEdge   = false;
-        return;
+        s_freeMoveAnchor->playerMoveOrderDefault(
+            nullptr, nullptr, s_freeMoveAnchor->movement->pos);
+        s_freeMoveAnchor->movement->halt();
+        s_wasdDownedMovementActive = false;
+        DebugLog("[WASDCombat] dc_downed_crawl_cancelled_on_suspend");
     }
+    s_wasdWasActive    = false;
+    s_combatWASDLogged = false;
+    s_retreatLogged    = false;
+    s_rmbPressedEdge   = false;
+}
 
-    bool bW = s_wHeld, bA = s_aHeld, bS = s_sHeld, bD = s_dHeld;
-    bool wasdActive = bW || bA || bS || bD;
-    bool inCombat   = s_freeMoveAnchor->isInCombatMode(true, true);
-
-    // Ground clicks during the hold never reach playerMove, so use the poll-thread RMB edge.
+static void mlConsumeClickEdge()
+{
     if (s_rmbPressedEdge)
     {
         s_rmbPressedEdge = false;
@@ -1248,7 +1219,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             DebugLog("[WASDCombat] dc_wasd_hold_cleared_by_click_input");
         }
     }
+}
 
+static void mlTrackCombatEdges(bool inCombat, bool wasdActive)
+{
     if (inCombat && !s_wasPrevInCombat)
     {
         s_chaseFlapsCount++;
@@ -1289,299 +1263,301 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
 #endif
     }
     s_wasPrevInCombat = inCombat;
+}
 
-    if (wasdActive)
+static void mlApplyPostAiWasd(bool bW, bool bA, bool bS, bool bD, bool inCombat)
+{
+    if (!s_wasdWasActive)
     {
-        if (!s_wasdWasActive)
+        s_combatWASDLogged     = false;
+        s_retreatLogged        = false;
+        s_postWasdGraceActive  = false;
+        s_combatReentryAllowed = false;
+
+        // Record a pending click first: only that click needs a disengage order.
+        bool hadPendingClick     = s_playerPointClickActive;
+        s_wasdHoldActive         = false;
+        s_playerPointClickActive = false;
+        s_holdPosValid           = false;
+        s_idleHoldEngaged        = false;
+
+        if (isUsingStationaryTurret(s_freeMoveAnchor))
+            DebugLog("[WASDCombat] stationary_crossbow_cancelled_by_wasd");
+
+        // The disengage order pathfinds and barks "I can't get out of here" when the path fails.
+        if (s_freeMoveAnchor->movement
+            && hadPendingClick
+            && !downedOrderDriven(s_freeMoveAnchor)
+            && !moveOrderMayBark(s_freeMoveAnchor))
         {
-            s_combatWASDLogged     = false;
-            s_retreatLogged        = false;
-            s_postWasdGraceActive  = false;
-            s_combatReentryAllowed = false;
-
-            // Record a pending click first: only that click needs a disengage order.
-            bool hadPendingClick     = s_playerPointClickActive;
-            s_wasdHoldActive         = false;
-            s_playerPointClickActive = false;
-            s_holdPosValid           = false;
-            s_idleHoldEngaged        = false;
-
-            if (isUsingStationaryTurret(s_freeMoveAnchor))
-                DebugLog("[WASDCombat] stationary_crossbow_cancelled_by_wasd");
-
-            // The disengage order pathfinds and barks "I can't get out of here" when the path fails.
-            if (s_freeMoveAnchor->movement
-                && hadPendingClick
-                && !downedOrderDriven(s_freeMoveAnchor)
-                && !moveOrderMayBark(s_freeMoveAnchor))
+            Ogre::Vector3 cancelDir;
+            if (computeWASDDirection(bW, bA, bS, bD, cancelDir))
             {
-                Ogre::Vector3 cancelDir;
-                if (computeWASDDirection(bW, bA, bS, bD, cancelDir))
-                {
-                    Ogre::Vector3 dest = s_freeMoveAnchor->movement->pos;
-                    s_freeMoveAnchor->playerMoveOrderDefault(nullptr, nullptr, dest);
+                Ogre::Vector3 dest = s_freeMoveAnchor->movement->pos;
+                s_freeMoveAnchor->playerMoveOrderDefault(nullptr, nullptr, dest);
 #if RETREAT_VERBOSE_DIAG
-                    DebugLog("[WASDCombat] wasd_pointclick_disengage_path_used");
-                    DebugLog("[WASDCombat] pointclick_cancel_function_called_by_wasd");
-                    if (inCombat || s_retreatLockGoSuppressed)
-                    {
-                        DebugLog("[WASDCombat] wasd_attack_target_cleared");
-                        DebugLog("[WASDCombat] wasd_combat_focus_cleared");
-                        DebugLog("[WASDCombat] wasd_retreat_matches_pointclick_behavior");
-                    }
+                DebugLog("[WASDCombat] wasd_pointclick_disengage_path_used");
+                DebugLog("[WASDCombat] pointclick_cancel_function_called_by_wasd");
+                if (inCombat || s_retreatLockGoSuppressed)
+                {
+                    DebugLog("[WASDCombat] wasd_attack_target_cleared");
+                    DebugLog("[WASDCombat] wasd_combat_focus_cleared");
+                    DebugLog("[WASDCombat] wasd_retreat_matches_pointclick_behavior");
+                }
 #endif
-                }
-            }
-        }
-
-        if (!s_cameraLockTurretSuspend && !s_menuSuspendActive
-            && !downedOrderDriven(s_freeMoveAnchor))    // halt() would kill the outdoor crawl order each frame
-        {
-            if (s_healingJobActive)
-            {
-                if (!s_medicalJobSuppressedThisHold)
-                {
-                    s_medicalJobSuppressedThisHold = true;
-                    DebugLog("[WASDCombat] medical_job_blocks_wasd");
-                }
-            }
-            else
-            {
-                { LONGLONG _wi = qpcNow();
-                  applyPlayerMovement(bW, bA, bS, bD);
-                  s_prof_wasdInject += qpcNow() - _wi; }
-                { ULONGLONG t = GetTickCount64();
-                  if (t - s_movInjLogTick >= 1000) { s_movInjLogTick = t;
-                      if (g_log.debugVerbose)
-                          DebugLog("[WASDCombat] movement_injection_allowed"); } }
-            }
-        }
-        // Downed movement runs in step 5 only: its order persists through the AI loop.
-
-        if (inCombat && !s_retreatLogged && ou->player->camera)
-        {
-            Character* aiTarget = s_freeMoveAnchor->getAttackTarget().getCharacter();
-            if (aiTarget && aiTarget->movement)
-            {
-                Ogre::Vector3 camFwd = ou->player->camera->getFacingDirection();
-                camFwd.y = 0.0f;
-                float cflen = camFwd.length();
-                if (cflen > 0.001f)
-                {
-                    camFwd /= cflen;
-                    Ogre::Vector3 camRight(-camFwd.z, 0.0f, camFwd.x);
-                    Ogre::Vector3 mv = Ogre::Vector3::ZERO;
-                    if (bW) mv += camFwd; if (bS) mv -= camFwd;
-                    if (bD) mv += camRight; if (bA) mv -= camRight;
-                    float mlen = mv.length();
-                    if (mlen > 0.001f)
-                    {
-                        mv /= mlen;
-                        Ogre::Vector3 toEnemy = aiTarget->movement->getPosition()
-                                              - s_freeMoveAnchor->movement->getPosition();
-                        toEnemy.y = 0.0f;
-                        float elen = toEnemy.length();
-                        if (elen > 0.001f && mv.dotProduct(toEnemy / elen) < -0.3f)
-                            s_retreatLogged = true;
-                    }
-                }
-            }
-        }
-
-        // CharMovement::periodicUpdate skips xpRunning in MOVE_DIRECTION mode, so award it here.
-        {
-            static const float     WALK_THRESHOLD           = 0.1f;
-            static const ULONGLONG ATHLETICS_XP_INTERVAL_MS = 1000;
-
-            float currentSpd = s_freeMoveAnchor->movement->desiredSpeed;
-
-            if (!s_dcShutdownInProgress
-                && !s_cameraLockTurretSuspend
-                && !s_healingJobActive
-                && !isProtectedAnimationState(s_freeMoveAnchor)
-                && currentSpd > WALK_THRESHOLD)
-            {
-                ULONGLONG nowXP   = GetTickCount64();
-                ULONGLONG elapsed = nowXP - s_athleticsXpLastTick;
-
-                if (s_athleticsXpLastTick == 0)
-                {
-                    s_athleticsXpLastTick = nowXP;
-                }
-                else if (elapsed >= ATHLETICS_XP_INTERVAL_MS)
-                {
-                    CharStats* stXP = s_freeMoveAnchor->getStats();
-                    if (stXP)
-                    {
-                        float deltaTime = elapsed / 1000.0f;
-                        stXP->xpRunning(deltaTime, currentSpd);
-                        if (g_log.debugLogging)
-                        {
-                            MoveSpeed tier = s_freeMoveAnchor->movement->speedOrders;
-                            const char* tierName = (tier == WALK) ? "walk"
-                                                 : (tier == JOG)  ? "jog"
-                                                 :                  "run";
-                            char xpBuf[96];
-                            sprintf_s(xpBuf, sizeof(xpBuf),
-                                "[WASDCombat] dc_xp_movement_bridge_tick skill=Athletics speed=%s",
-                                tierName);
-                            DebugLog(xpBuf);
-                        }
-                    }
-                    s_athleticsXpLastTick = nowXP;
-                }
-            }
-            else
-            {
-                s_athleticsXpLastTick = 0;
             }
         }
     }
-    else
+
+    if (!s_cameraLockTurretSuspend && !s_menuSuspendActive
+        && !downedOrderDriven(s_freeMoveAnchor))    // halt() would kill the outdoor crawl order each frame
     {
-        if (s_wasdWasActive)
+        if (s_healingJobActive)
         {
-            s_combatWASDLogged     = false;
-            s_retreatLogged        = false;
-            s_wasdReleasedTick     = GetTickCount64();
-            s_postWasdGraceActive  = true;
-            s_postWasdGraceStart   = GetTickCount64();
-            s_combatReentryAllowed = false;
-
-            ULONGLONG tapMs      = s_wasdTapStartMs;
-            ULONGLONG tapElapsed = (tapMs > 0) ? (GetTickCount64() - tapMs) : ~0ULL;
-            bool isNudgeTap      = (tapElapsed <= g_loco.wasdNudgeTapWindowMs);
-            s_wasdTapStartMs     = 0;
-
-            if (isNudgeTap && !isDownedButMovable(s_freeMoveAnchor))
+            if (!s_medicalJobSuppressedThisHold)
             {
-                // A nudge tap stops without a facing correction, so the character does not turn around.
-                DebugLog("[WASDCombat] wasd_nudge_tap_detected");
-                CharMovement* mvN = s_freeMoveAnchor ? s_freeMoveAnchor->movement : nullptr;
-                if (mvN)
+                s_medicalJobSuppressedThisHold = true;
+                DebugLog("[WASDCombat] medical_job_blocks_wasd");
+            }
+        }
+        else
+        {
+            { LONGLONG _wi = qpcNow();
+              applyPlayerMovement(bW, bA, bS, bD);
+              s_prof_wasdInject += qpcNow() - _wi; }
+            { ULONGLONG t = GetTickCount64();
+              if (t - s_movInjLogTick >= 1000) { s_movInjLogTick = t;
+                  if (g_log.debugVerbose)
+                      DebugLog("[WASDCombat] movement_injection_allowed"); } }
+        }
+    }
+    // Downed movement runs in step 5 only: its order persists through the AI loop.
+
+    if (inCombat && !s_retreatLogged && ou->player->camera)
+    {
+        Character* aiTarget = s_freeMoveAnchor->getAttackTarget().getCharacter();
+        if (aiTarget && aiTarget->movement)
+        {
+            Ogre::Vector3 camFwd = ou->player->camera->getFacingDirection();
+            camFwd.y = 0.0f;
+            float cflen = camFwd.length();
+            if (cflen > 0.001f)
+            {
+                camFwd /= cflen;
+                Ogre::Vector3 camRight(-camFwd.z, 0.0f, camFwd.x);
+                Ogre::Vector3 mv = Ogre::Vector3::ZERO;
+                if (bW) mv += camFwd; if (bS) mv -= camFwd;
+                if (bD) mv += camRight; if (bA) mv -= camRight;
+                float mlen = mv.length();
+                if (mlen > 0.001f)
                 {
-                    mvN->halt();
-                    mvN->desiredMotion    = Ogre::Vector3::ZERO;
-                    mvN->moveLimit        = 0.0f;
-                    mvN->currentMotion    = Ogre::Vector3::ZERO;
-                    s_wasdMovementApplied = false;
-                    DebugLog("[WASDCombat] wasd_nudge_stop_no_turnaround");
-                    s_prevWasdDir = Ogre::Vector3::ZERO;
-                    DebugLog("[WASDCombat] stale_movement_vector_cleared");
-                    dcSnapCancelOrder(s_freeMoveAnchor);   // gated: no bark indoors/locked
-                    DebugLog("[WASDCombat] anchor_snapped_no_facing_change");
+                    mv /= mlen;
+                    Ogre::Vector3 toEnemy = aiTarget->movement->getPosition()
+                                          - s_freeMoveAnchor->movement->getPosition();
+                    toEnemy.y = 0.0f;
+                    float elen = toEnemy.length();
+                    if (elen > 0.001f && mv.dotProduct(toEnemy / elen) < -0.3f)
+                        s_retreatLogged = true;
                 }
             }
-            else
-            {
-                if (g_release.wasdStopOnRelease && s_freeMoveAnchor && s_freeMoveAnchor->movement)
-                {
-                    if (g_log.debugLogging) DebugLog("[WASDCombat] wasd_release_detected");
-                    CharMovement* mvR = s_freeMoveAnchor->movement;
-
-                    // An attack windup (STARTUP_STATE) alone must not block the release stop.
-                    bool releaseCommitted = false;
-                    if (isCommittedAction(s_freeMoveAnchor))
-                    {
-                        CombatClass*   ccRel = s_freeMoveAnchor->getCombatClass();
-                        swordStateEnum stRel = ccRel ? ccRel->getCombatState() : COMBAT_FINISHED;
-                        bool onlyStartup = (stRel == STARTUP_STATE)
-                                        && !isProtectedAnimationState(s_freeMoveAnchor)
-                                        && !s_healingJobActive;
-                        releaseCommitted = !onlyStartup;
-                    }
-
-                    if (releaseCommitted)
-                    {
-                        DebugLog("[WASDCombat] wasd_release_stop_skipped_committed_action");
-                    }
-                    else if (!downedOrderDriven(s_freeMoveAnchor))
-                    {
-                        // The outdoor downed crawl is order-driven and stops in the downed block below.
-                        s_prevWasdDir = Ogre::Vector3::ZERO;
-                        DebugLog("[WASDCombat] wasd_release_vector_zeroed");
-
-                        if (g_release.wasdAnchorSnapOnRelease)
-                        {
-                            dcSnapCancelOrder(s_freeMoveAnchor);   // gated: no bark indoors/locked
-                            if (g_log.debugLogging) DebugLog("[WASDCombat] wasd_release_anchor_snapped");
-                        }
-
-                        if (g_release.wasdZeroVelocityOnRelease)
-                        {
-                            mvR->halt();
-                            mvR->desiredMotion = Ogre::Vector3::ZERO;
-                            mvR->moveLimit     = 0.0f;
-                            if (g_release.wasdReleaseDecelerationMultiplier > 1.0f)
-                                mvR->currentMotion = Ogre::Vector3::ZERO;
-                            s_wasdMovementApplied = false;
-                            if (g_log.debugLogging) DebugLog("[WASDCombat] wasd_release_velocity_zeroed");
-                        }
-                    }
-                }
-            }
-
-            // Not isDownedButMovable: it can turn false while the WASD destination is still pending.
-            if (s_wasdDownedMovementActive)
-            {
-                CharMovement* mvDown = s_freeMoveAnchor ? s_freeMoveAnchor->movement : nullptr;
-                if (mvDown)
-                {
-                    // An order at the current position cancels the MOVE job, not only the destination.
-                    s_freeMoveAnchor->playerMoveOrderDefault(nullptr, nullptr, mvDown->pos);
-                    mvDown->halt();
-                }
-                ProneState proneStop = s_freeMoveAnchor ? s_freeMoveAnchor->getProneState()
-                                                        : PS_NORMAL;
-                DebugLog("[WASDCombat] wasd_downed_key_released");
-                DebugLog("[WASDCombat] wasd_downed_destination_cleared");
-                DebugLog("[WASDCombat] wasd_downed_cached_direction_cleared");
-                DebugLog("[WASDCombat] wasd_downed_movement_stopped");
-                if (proneStop == PS_CRIPPLED ||
-                    (s_freeMoveAnchor && s_freeMoveAnchor->isCrippled()))
-                    DebugLog("[WASDCombat] wasd_crippled_instant_stop_applied");
-                DebugLog("[WASDCombat] wasd_downed_pointclick_destination_not_persisted");
-            }
-            else if (s_freeMoveAnchor && isDownedButMovable(s_freeMoveAnchor))
-            {
-                // Not WASD-created, so this is a real point-click destination; keep it.
-                DebugLog("[WASDCombat] vanilla_pointclick_downed_destination_preserved");
-            }
-            s_wasdDownedMovementActive    = false;
-            s_retreatLockEverActive       = false;
-            s_retreatSessionCacheCount    = 0;
-            s_retreatTargetsProcessed     = 0;
-            s_retreatTargetsCachedSkipped = 0;
-            s_retreatBlockedAttackerCount    = 0;
-            s_medicalJobSuppressedThisHold   = false;
-            CharMovement* mvStop = s_freeMoveAnchor->movement;
-            if (mvStop && s_wasdMovementApplied &&
-                !isCommittedAction(s_freeMoveAnchor) &&
-                !isDownedButMovable(s_freeMoveAnchor))
-            {
-                Ogre::Vector3 velPre = mvStop->currentMotion;
-                mvStop->halt();
-                mvStop->desiredMotion = Ogre::Vector3::ZERO;
-                mvStop->moveLimit     = 0.0f;
-                if (g_loco.wasdDecelerationMultiplier > 1.0f)
-                    mvStop->currentMotion = Ogre::Vector3::ZERO;
-                s_wasdMovementApplied = false;
-                s_prevWasdDir         = Ogre::Vector3::ZERO;
-
-                char buf[192];
-                sprintf_s(buf, sizeof(buf),
-                    "[WASDCombat] wasd_released instant_stop vel_pre=(%.1f,%.1f,%.1f)",
-                    velPre.x, velPre.y, velPre.z);
-                DebugLog(buf);
-            }
-
-            s_wasdHoldActive         = true;
-            s_playerPointClickActive = false;
         }
     }
 
-    s_wasdWasActive = wasdActive;
+    // CharMovement::periodicUpdate skips xpRunning in MOVE_DIRECTION mode, so award it here.
+    {
+        static const float     WALK_THRESHOLD           = 0.1f;
+        static const ULONGLONG ATHLETICS_XP_INTERVAL_MS = 1000;
 
+        float currentSpd = s_freeMoveAnchor->movement->desiredSpeed;
+
+        if (!s_dcShutdownInProgress
+            && !s_cameraLockTurretSuspend
+            && !s_healingJobActive
+            && !isProtectedAnimationState(s_freeMoveAnchor)
+            && currentSpd > WALK_THRESHOLD)
+        {
+            ULONGLONG nowXP   = GetTickCount64();
+            ULONGLONG elapsed = nowXP - s_athleticsXpLastTick;
+
+            if (s_athleticsXpLastTick == 0)
+            {
+                s_athleticsXpLastTick = nowXP;
+            }
+            else if (elapsed >= ATHLETICS_XP_INTERVAL_MS)
+            {
+                CharStats* stXP = s_freeMoveAnchor->getStats();
+                if (stXP)
+                {
+                    float deltaTime = elapsed / 1000.0f;
+                    stXP->xpRunning(deltaTime, currentSpd);
+                    if (g_log.debugLogging)
+                    {
+                        MoveSpeed tier = s_freeMoveAnchor->movement->speedOrders;
+                        const char* tierName = (tier == WALK) ? "walk"
+                                             : (tier == JOG)  ? "jog"
+                                             :                  "run";
+                        char xpBuf[96];
+                        sprintf_s(xpBuf, sizeof(xpBuf),
+                            "[WASDCombat] dc_xp_movement_bridge_tick skill=Athletics speed=%s",
+                            tierName);
+                        DebugLog(xpBuf);
+                    }
+                }
+                s_athleticsXpLastTick = nowXP;
+            }
+        }
+        else
+        {
+            s_athleticsXpLastTick = 0;
+        }
+    }
+}
+
+static void mlHandleWasdRelease()
+{
+    if (s_wasdWasActive)
+    {
+        s_combatWASDLogged     = false;
+        s_retreatLogged        = false;
+        s_wasdReleasedTick     = GetTickCount64();
+        s_postWasdGraceActive  = true;
+        s_postWasdGraceStart   = GetTickCount64();
+        s_combatReentryAllowed = false;
+
+        ULONGLONG tapMs      = s_wasdTapStartMs;
+        ULONGLONG tapElapsed = (tapMs > 0) ? (GetTickCount64() - tapMs) : ~0ULL;
+        bool isNudgeTap      = (tapElapsed <= g_loco.wasdNudgeTapWindowMs);
+        s_wasdTapStartMs     = 0;
+
+        if (isNudgeTap && !isDownedButMovable(s_freeMoveAnchor))
+        {
+            // A nudge tap stops without a facing correction, so the character does not turn around.
+            DebugLog("[WASDCombat] wasd_nudge_tap_detected");
+            CharMovement* mvN = s_freeMoveAnchor ? s_freeMoveAnchor->movement : nullptr;
+            if (mvN)
+            {
+                mvN->halt();
+                mvN->desiredMotion    = Ogre::Vector3::ZERO;
+                mvN->moveLimit        = 0.0f;
+                mvN->currentMotion    = Ogre::Vector3::ZERO;
+                s_wasdMovementApplied = false;
+                DebugLog("[WASDCombat] wasd_nudge_stop_no_turnaround");
+                s_prevWasdDir = Ogre::Vector3::ZERO;
+                DebugLog("[WASDCombat] stale_movement_vector_cleared");
+                dcSnapCancelOrder(s_freeMoveAnchor);   // gated: no bark indoors/locked
+                DebugLog("[WASDCombat] anchor_snapped_no_facing_change");
+            }
+        }
+        else
+        {
+            if (g_release.wasdStopOnRelease && s_freeMoveAnchor && s_freeMoveAnchor->movement)
+            {
+                if (g_log.debugLogging) DebugLog("[WASDCombat] wasd_release_detected");
+                CharMovement* mvR = s_freeMoveAnchor->movement;
+
+                // An attack windup (STARTUP_STATE) alone must not block the release stop.
+                bool releaseCommitted = false;
+                if (isCommittedAction(s_freeMoveAnchor))
+                {
+                    CombatClass*   ccRel = s_freeMoveAnchor->getCombatClass();
+                    swordStateEnum stRel = ccRel ? ccRel->getCombatState() : COMBAT_FINISHED;
+                    bool onlyStartup = (stRel == STARTUP_STATE)
+                                    && !isProtectedAnimationState(s_freeMoveAnchor)
+                                    && !s_healingJobActive;
+                    releaseCommitted = !onlyStartup;
+                }
+
+                if (releaseCommitted)
+                {
+                    DebugLog("[WASDCombat] wasd_release_stop_skipped_committed_action");
+                }
+                else if (!downedOrderDriven(s_freeMoveAnchor))
+                {
+                    // The outdoor downed crawl is order-driven and stops in the downed block below.
+                    s_prevWasdDir = Ogre::Vector3::ZERO;
+                    DebugLog("[WASDCombat] wasd_release_vector_zeroed");
+
+                    if (g_release.wasdAnchorSnapOnRelease)
+                    {
+                        dcSnapCancelOrder(s_freeMoveAnchor);   // gated: no bark indoors/locked
+                        if (g_log.debugLogging) DebugLog("[WASDCombat] wasd_release_anchor_snapped");
+                    }
+
+                    if (g_release.wasdZeroVelocityOnRelease)
+                    {
+                        mvR->halt();
+                        mvR->desiredMotion = Ogre::Vector3::ZERO;
+                        mvR->moveLimit     = 0.0f;
+                        if (g_release.wasdReleaseDecelerationMultiplier > 1.0f)
+                            mvR->currentMotion = Ogre::Vector3::ZERO;
+                        s_wasdMovementApplied = false;
+                        if (g_log.debugLogging) DebugLog("[WASDCombat] wasd_release_velocity_zeroed");
+                    }
+                }
+            }
+        }
+
+        // Not isDownedButMovable: it can turn false while the WASD destination is still pending.
+        if (s_wasdDownedMovementActive)
+        {
+            CharMovement* mvDown = s_freeMoveAnchor ? s_freeMoveAnchor->movement : nullptr;
+            if (mvDown)
+            {
+                // An order at the current position cancels the MOVE job, not only the destination.
+                s_freeMoveAnchor->playerMoveOrderDefault(nullptr, nullptr, mvDown->pos);
+                mvDown->halt();
+            }
+            ProneState proneStop = s_freeMoveAnchor ? s_freeMoveAnchor->getProneState()
+                                                    : PS_NORMAL;
+            DebugLog("[WASDCombat] wasd_downed_key_released");
+            DebugLog("[WASDCombat] wasd_downed_destination_cleared");
+            DebugLog("[WASDCombat] wasd_downed_cached_direction_cleared");
+            DebugLog("[WASDCombat] wasd_downed_movement_stopped");
+            if (proneStop == PS_CRIPPLED ||
+                (s_freeMoveAnchor && s_freeMoveAnchor->isCrippled()))
+                DebugLog("[WASDCombat] wasd_crippled_instant_stop_applied");
+            DebugLog("[WASDCombat] wasd_downed_pointclick_destination_not_persisted");
+        }
+        else if (s_freeMoveAnchor && isDownedButMovable(s_freeMoveAnchor))
+        {
+            // Not WASD-created, so this is a real point-click destination; keep it.
+            DebugLog("[WASDCombat] vanilla_pointclick_downed_destination_preserved");
+        }
+        s_wasdDownedMovementActive    = false;
+        s_retreatLockEverActive       = false;
+        s_retreatSessionCacheCount    = 0;
+        s_retreatTargetsProcessed     = 0;
+        s_retreatTargetsCachedSkipped = 0;
+        s_retreatBlockedAttackerCount    = 0;
+        s_medicalJobSuppressedThisHold   = false;
+        CharMovement* mvStop = s_freeMoveAnchor->movement;
+        if (mvStop && s_wasdMovementApplied &&
+            !isCommittedAction(s_freeMoveAnchor) &&
+            !isDownedButMovable(s_freeMoveAnchor))
+        {
+            Ogre::Vector3 velPre = mvStop->currentMotion;
+            mvStop->halt();
+            mvStop->desiredMotion = Ogre::Vector3::ZERO;
+            mvStop->moveLimit     = 0.0f;
+            if (g_loco.wasdDecelerationMultiplier > 1.0f)
+                mvStop->currentMotion = Ogre::Vector3::ZERO;
+            s_wasdMovementApplied = false;
+            s_prevWasdDir         = Ogre::Vector3::ZERO;
+
+            char buf[192];
+            sprintf_s(buf, sizeof(buf),
+                "[WASDCombat] wasd_released instant_stop vel_pre=(%.1f,%.1f,%.1f)",
+                velPre.x, velPre.y, velPre.z);
+            DebugLog(buf);
+        }
+
+        s_wasdHoldActive         = true;
+        s_playerPointClickActive = false;
+    }
+}
+
+static void mlUpdatePostWasdGrace(bool wasdActive)
+{
     if (!wasdActive)
     {
         if (s_postWasdGraceActive)
@@ -1612,56 +1588,58 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
     {
         s_combatReentryAllowed = false;
     }
+}
 
-    // Kenshi skips go() when no enemy is near, so the retreat state would otherwise flap.
+static void mlTrackRetreatState(bool wasdActive)
+{
+    bool curRetreat = wasdActive && s_retreatLockEverActive;
+    if (curRetreat && !s_wasdRetreatActive)
     {
-        bool curRetreat = wasdActive && s_retreatLockEverActive;
-        if (curRetreat && !s_wasdRetreatActive)
-        {
-            s_wasdRetreatActive      = true;
-            s_retreatActiveStartTick = GetTickCount64();
-            s_retreatCleanLogged     = false;
-            s_combatFlickerLogged    = false;
+        s_wasdRetreatActive      = true;
+        s_retreatActiveStartTick = GetTickCount64();
+        s_retreatCleanLogged     = false;
+        s_combatFlickerLogged    = false;
 #if RETREAT_VERBOSE_DIAG
-            DebugLog("[WASDCombat] wasd_retreat_state_active");
+        DebugLog("[WASDCombat] wasd_retreat_state_active");
 #endif
-        }
-        else if (!curRetreat && s_wasdRetreatActive)
-        {
-            s_wasdRetreatActive = false;
-#if RETREAT_VERBOSE_DIAG
-            if (!wasdActive)
-                DebugLog("[WASDCombat] wasd_manual_retreat_lock_released");
-#endif
-        }
-        if (s_wasdRetreatActive && !s_retreatCleanLogged &&
-            GetTickCount64() - s_retreatActiveStartTick >= 1000)
-        {
-            s_retreatCleanLogged = true;
-            DebugLog("[WASDCombat] retreat_clean_locomotion_confirmed");
-            if (s_lastKnownEnemyCount > 1)
-                DebugLog("[WASDCombat] retreat_locomotion_stable_under_multi_chase");
-            DebugLog("[WASDCombat] retreat_perf_optimized");
-            char scanBuf[128];
-            sprintf_s(scanBuf, sizeof(scanBuf),
-                "[WASDCombat] retreat_scan_interval_ms %llu cache_size=%d processed=%d skipped=%d",
-                JOB_REMOVAL_INTERVAL_MS, s_retreatSessionCacheCount,
-                s_retreatTargetsProcessed, s_retreatTargetsCachedSkipped);
-            DebugLog(scanBuf);
-#if RETREAT_VERBOSE_DIAG
-            {
-            char fb[64];
-            sprintf_s(fb, sizeof(fb), "[WASDCombat] retreat_attacker_cache_size count=%d",
-                s_retreatSessionCacheCount);
-            DebugLog(fb);
-            if (s_retreatTargetsCachedSkipped > 0)
-                DebugLog("[WASDCombat] retreat_fast_path_used");
-            }
-#endif
-        }
     }
+    else if (!curRetreat && s_wasdRetreatActive)
+    {
+        s_wasdRetreatActive = false;
+#if RETREAT_VERBOSE_DIAG
+        if (!wasdActive)
+            DebugLog("[WASDCombat] wasd_manual_retreat_lock_released");
+#endif
+    }
+    if (s_wasdRetreatActive && !s_retreatCleanLogged &&
+        GetTickCount64() - s_retreatActiveStartTick >= 1000)
+    {
+        s_retreatCleanLogged = true;
+        DebugLog("[WASDCombat] retreat_clean_locomotion_confirmed");
+        if (s_lastKnownEnemyCount > 1)
+            DebugLog("[WASDCombat] retreat_locomotion_stable_under_multi_chase");
+        DebugLog("[WASDCombat] retreat_perf_optimized");
+        char scanBuf[128];
+        sprintf_s(scanBuf, sizeof(scanBuf),
+            "[WASDCombat] retreat_scan_interval_ms %llu cache_size=%d processed=%d skipped=%d",
+            JOB_REMOVAL_INTERVAL_MS, s_retreatSessionCacheCount,
+            s_retreatTargetsProcessed, s_retreatTargetsCachedSkipped);
+        DebugLog(scanBuf);
+#if RETREAT_VERBOSE_DIAG
+        {
+        char fb[64];
+        sprintf_s(fb, sizeof(fb), "[WASDCombat] retreat_attacker_cache_size count=%d",
+            s_retreatSessionCacheCount);
+        DebugLog(fb);
+        if (s_retreatTargetsCachedSkipped > 0)
+            DebugLog("[WASDCombat] retreat_fast_path_used");
+        }
+#endif
+    }
+}
 
-    { LONGLONG _ctStart = qpcNow();
+static void mlTrackCombatState(bool wasdActive)
+{
     if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor)
     {
         CombatClass* cc2 = s_freeMoveAnchor->getCombatClass();
@@ -1768,7 +1746,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             }
         }
     }
+}
 
+static void mlTrackProtectedAnimation()
+{
     if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor)
     {
         bool nowProtected = isProtectedAnimationState(s_freeMoveAnchor);
@@ -1788,8 +1769,10 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
 
         s_wasProtectedState = nowProtected;
     }
-    s_prof_combatTarget += qpcNow() - _ctStart; }  // end combat-target timer
+}
 
+static void mlApplyHoldClamp(bool wasdActive)
+{
     // Final hold clamp after AI and pathing; X/Z only, so gravity can still settle Y.
     if (!wasdActive)
     {
@@ -1847,62 +1830,199 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             DebugLog("[WASDCombat] dc_authority_gate allowVanillaMove=0 reason=wasd");
         }
     }
+}
 
+static void mlReportPerf()
+{
+    ULONGLONG nowMs = GetTickCount64();
+    if (nowMs - s_prof_windowStart >= 1000)
     {
-        ULONGLONG nowMs = GetTickCount64();
-        if (nowMs - s_prof_windowStart >= 1000)
+        float f = (float)s_profFreq / 1000.0f;
+        char perfBuf[512];
+        sprintf_s(perfBuf, sizeof(perfBuf),
+            "[WASDCombat] dc_perf mainLoop_ms=%.2f charMove_ms=%.2f"
+            " playerControl_ms=%.2f committedAction_ms=%.2f"
+            " threatScan_ms=%.2f cameraLock_ms=%.2f"
+            " wasdInject_ms=%.2f combatTarget_ms=%.2f"
+            " enemyCount=%d nearbyCombatantCount=%d dcMode=%d wasdHeld=%d",
+            s_prof_mainLoop      / f,
+            s_prof_charMove      / f,
+            s_prof_playerControl / f,
+            s_prof_committedAct  / f,
+            s_prof_threatScan    / f,
+            s_prof_cameraLock    / f,
+            s_prof_wasdInject    / f,
+            s_prof_combatTarget  / f,
+            s_lastKnownEnemyCount,
+            s_nearbyEnemyCount,
+            (int)(s_mode == MODE_FREE_MOVE),
+            (int)(s_wHeld || s_aHeld || s_sHeld || s_dHeld));
+        DebugLog(perfBuf);
+
         {
-            float f = (float)s_profFreq / 1000.0f;
-            char perfBuf[512];
-            sprintf_s(perfBuf, sizeof(perfBuf),
-                "[WASDCombat] dc_perf mainLoop_ms=%.2f charMove_ms=%.2f"
-                " playerControl_ms=%.2f committedAction_ms=%.2f"
-                " threatScan_ms=%.2f cameraLock_ms=%.2f"
-                " wasdInject_ms=%.2f combatTarget_ms=%.2f"
-                " enemyCount=%d nearbyCombatantCount=%d dcMode=%d wasdHeld=%d",
-                s_prof_mainLoop      / f,
-                s_prof_charMove      / f,
-                s_prof_playerControl / f,
-                s_prof_committedAct  / f,
-                s_prof_threatScan    / f,
-                s_prof_cameraLock    / f,
-                s_prof_wasdInject    / f,
-                s_prof_combatTarget  / f,
-                s_lastKnownEnemyCount,
-                s_nearbyEnemyCount,
-                (int)(s_mode == MODE_FREE_MOVE),
-                (int)(s_wHeld || s_aHeld || s_sHeld || s_dHeld));
-            DebugLog(perfBuf);
-
+            bool wasdNowC    = s_wHeld || s_aHeld || s_sHeld || s_dHeld;
+            bool enemiesChasing = (s_lastKnownEnemyCount > 0);
+            char chaseBuf[256];
+            sprintf_s(chaseBuf, sizeof(chaseBuf),
+                "[WASDCombat] dc_chase_perf enemyCount=%d nearbyCombatantCount=%d"
+                " combatStateFlaps=%d pathRecalcSuspected=%d",
+                s_lastKnownEnemyCount, s_nearbyEnemyCount,
+                s_chaseFlapsCount, (int)(s_pathfindingEnemyCount > 0));
+            DebugLog(chaseBuf);
+            if (enemiesChasing)
             {
-                bool wasdNowC    = s_wHeld || s_aHeld || s_sHeld || s_dHeld;
-                bool enemiesChasing = (s_lastKnownEnemyCount > 0);
-                char chaseBuf[256];
-                sprintf_s(chaseBuf, sizeof(chaseBuf),
-                    "[WASDCombat] dc_chase_perf enemyCount=%d nearbyCombatantCount=%d"
-                    " combatStateFlaps=%d pathRecalcSuspected=%d",
-                    s_lastKnownEnemyCount, s_nearbyEnemyCount,
-                    s_chaseFlapsCount, (int)(s_pathfindingEnemyCount > 0));
-                DebugLog(chaseBuf);
-                if (enemiesChasing)
-                {
-                    if (wasdNowC)
-                        DebugLog("[WASDCombat] dc_wasd_chase_active");
-                    else
-                        DebugLog("[WASDCombat] dc_point_click_chase_compare");
-                }
-                s_chaseFlapsCount = 0;
+                if (wasdNowC)
+                    DebugLog("[WASDCombat] dc_wasd_chase_active");
+                else
+                    DebugLog("[WASDCombat] dc_point_click_chase_compare");
             }
+            s_chaseFlapsCount = 0;
+        }
 
-            s_prof_mainLoop      = 0;
-            s_prof_charMove      = 0;
-            s_prof_playerControl = 0;
-            s_prof_committedAct  = 0;
-            s_prof_threatScan    = 0;
-            s_prof_cameraLock    = 0;
-            s_prof_wasdInject    = 0;
-            s_prof_combatTarget  = 0;
-            s_prof_windowStart   = nowMs;
+        s_prof_mainLoop      = 0;
+        s_prof_charMove      = 0;
+        s_prof_playerControl = 0;
+        s_prof_committedAct  = 0;
+        s_prof_threatScan    = 0;
+        s_prof_cameraLock    = 0;
+        s_prof_wasdInject    = 0;
+        s_prof_combatTarget  = 0;
+        s_prof_windowStart   = nowMs;
+    }
+}
+
+static void mainLoop_hook(GameWorld* thisptr, float time)
+{
+    // The stabilization countdown runs here so it advances while the shutdown flag is held.
+    if (s_dcShutdownInProgress)
+    {
+        mlWaitForSafeReacquire(thisptr, time);
+        return;
+    }
+
+    if (!s_profInited)
+    {
+        LARGE_INTEGER freq;
+        QueryPerformanceFrequency(&freq);
+        s_profFreq         = freq.QuadPart;
+        s_profInited       = true;
+        s_prof_windowStart = GetTickCount64();
+    }
+    ScopeTimer _tML(s_prof_mainLoop);
+
+    // 1. Safety gate.
+    if (mlSafetyGate(thisptr, time))
+        return;
+
+    // newGame() sets NEWGAME (0x4) before world teardown; the LOADGAME (0x2) path sets the flags too late.
+    mlHandleNewGameSignal();
+    mlTrackInventoryWindows();
+
+    // A reload can lose the anchor while DC stays on; take it again from the selection.
+    if (s_mode == MODE_FREE_MOVE && !s_lootUiSuspendActive && !s_freeMoveAnchor
+        && !s_dcShutdownInProgress && !s_loadGuardActive && ou && ou->player)
+    {
+        Character* sel = s_selectedCharacter;
+        if (sel && sel->movement && sel->isPlayerCharacter())
+        {
+            s_freeMoveAnchor = sel;
+            s_anchorMovement = sel->movement;
+            ou->player->startTrackCharacter(s_freeMoveAnchor);
+            DebugLog("[WASDCombat] dc_anchor_reacquired_selfheal");
         }
     }
+
+    if (s_fpActive && !isOwnInventoryOpen())
+        exitOTS(true);
+
+    // Registered here: the game loads its keyboard config before RE_Kenshi loads plugins.
+    if (!s_nativeCommandsRegistered)
+        registerNativeCommands(key);
+
+    if (s_nativeCommandsRegistered)
+        watchNativeBindChanges();
+
+    // Hooks read these snapshots, not the volatiles, to avoid a fence on 100+ calls per frame.
+    s_frameMode        = s_mode;
+    s_frameWasdHeld    = s_wHeld || s_aHeld || s_sHeld || s_dHeld;
+    s_frameLootSuspend = s_lootUiSuspendActive;
+
+    // 2. Selection tracking.
+    mlTrackSelection();
+
+    // 3. V-Mode transition.
+    { LONGLONG _clStart = qpcNow();
+    mlApplyModeTransition();
+
+    // The poll thread must never touch the camera, so the P edge is consumed here.
+    mlConsumeFirstPersonToggle();
+
+    // setStealthMode alone leaves the SNEAK button off, so drive the button's own handler.
+    mlConsumeSneakToggle();
+
+    // Feeds the FP clip clearance in fpDriveFrame.
+    mlScanNearestEnemyForFp(thisptr);
+    mlUpdateTurretSuspend();
+    // Inventory auto-pause is excluded: the loot suspension owns it.
+    mlUpdateMenuSuspend();
+    mlApplyCloseZoomOffset();
+    s_prof_cameraLock += qpcNow() - _clStart; }   // end camera-lock timer
+
+    // 4. HUD.
+    hudUpdate();
+
+    // 5. Pre-AI WASD application.
+    mlApplyPreAiWasd();
+
+    // 6. Original game loop: AI, CharMovement::update, and CombatClass::go.
+    s_retreatLockGoSuppressed = false;
+
+    // Also drive the FP camera here: the foliage pass samples the camera before CameraClass::update.
+    mlDriveFpCameraBeforeLoop();
+
+    s_mainLoopOrig(thisptr, time);
+
+    if (mlPostLoopLoadGuard())
+        return;
+
+    if (s_dcShutdownInProgress)
+        return;
+
+    // 8. Periodic squad-threat scan.
+    mlScanSquadThreat(thisptr);
+
+    // 9. Post-AI WASD re-application and instant stop.
+    if (!(s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && s_freeMoveAnchor->movement) || s_lootUiSuspendActive)
+    {
+        mlCancelWasdWhileInactive();
+        return;
+    }
+
+    bool bW = s_wHeld, bA = s_aHeld, bS = s_sHeld, bD = s_dHeld;
+    bool wasdActive = bW || bA || bS || bD;
+    bool inCombat   = s_freeMoveAnchor->isInCombatMode(true, true);
+
+    // Ground clicks during the hold never reach playerMove, so use the poll-thread RMB edge.
+    mlConsumeClickEdge();
+    mlTrackCombatEdges(inCombat, wasdActive);
+
+    if (wasdActive)
+        mlApplyPostAiWasd(bW, bA, bS, bD, inCombat);
+    else
+        mlHandleWasdRelease();
+
+    s_wasdWasActive = wasdActive;
+
+    mlUpdatePostWasdGrace(wasdActive);
+
+    // Kenshi skips go() when no enemy is near, so the retreat state would otherwise flap.
+    mlTrackRetreatState(wasdActive);
+
+    { LONGLONG _ctStart = qpcNow();
+    mlTrackCombatState(wasdActive);
+    mlTrackProtectedAnimation();
+    s_prof_combatTarget += qpcNow() - _ctStart; }  // end combat-target timer
+
+    mlApplyHoldClamp(wasdActive);
+    mlReportPerf();
 }

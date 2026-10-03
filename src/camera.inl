@@ -384,16 +384,8 @@ static void enterFirstPerson()
     DebugLog("[WASDCombat] dc_fp_entered");
 }
 
-// Runs from cameraUpdate_hook AFTER the game's camera update.
-static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
+static void fpUpdateMouseLook(bool uiOpen)
 {
-    if (s_mode != MODE_FREE_MOVE || !s_freeMoveAnchor
-        || !s_freeMoveAnchor->movement || s_lootUiSuspendActive)
-    {
-        exitFirstPerson(true);
-        return;
-    }
-
     fpShowCrosshair(!uiOpen);
 
     // The RMB hold-menu also frees the cursor to browse options; releasing RMB selects.
@@ -461,12 +453,10 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
         // Drain deltas accumulated while a UI owned the cursor, so the view does not jump.
         if (s_fpRawMouse) { float jx, jy; fpTakeMouseAccum(&jx, &jy); }
     }
+}
 
-    CharMovement* mvFP = s_freeMoveAnchor->movement;
-
-    // currentlyMoving covers point-click and autonomous movement, not only WASD.
-    bool fpMoving = mvFP->currentlyMoving || mvFP->currentSpeed > 0.25f;
-
+static void fpUpdateBodyYaw(CharMovement* mvFP, bool fpMoving)
+{
     // The release grace stops the neck limit snapping the camera onto a backpedal-facing body.
     bool strafeGrace = (GetTickCount64() - s_wasdLastHeldMs) < FP_STRAFE_GRACE_MS;
     if (s_frameWasdHeld || (fpMoving && strafeGrace))
@@ -526,8 +516,11 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
             s_fpBodyYaw = bodyYaw;
         }
     }
+}
 
-    // Only visuals use the smoothed view: smaller rotations reduce render-thread grass flicker.
+// Only visuals use the smoothed view: smaller rotations reduce render-thread grass flicker.
+static Ogre::Quaternion fpSmoothedViewRotation()
+{
     if (!s_fpSmValid) { s_fpYawSm = s_fpYaw; s_fpPitchSm = s_fpPitch; s_fpSmValid = true; }
     {
         float a = 1.0f - s_fpLookSmooth;   // 1.0 = snap (off), <1 = glide
@@ -543,192 +536,209 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
     Ogre::Quaternion q =
         Ogre::Quaternion(Ogre::Radian(s_fpYawSm),   Ogre::Vector3::UNIT_Y) *
         Ogre::Quaternion(Ogre::Radian(s_fpPitchSm), Ogre::Vector3::UNIT_X);
+    return q;
+}
 
-    // A close hostile pulls the eye back so it does not enter the aggressor's model.
+static void fpUpdateEnemyClearance()
+{
+    float enemyScale = 1.0f;
+    if (s_fpEnemyClearRadius > 0.0f && s_fpEnemyNearestDist >= 0.0f
+        && s_fpEnemyNearestDist < s_fpEnemyClearRadius)
     {
-        float enemyScale = 1.0f;
-        if (s_fpEnemyClearRadius > 0.0f && s_fpEnemyNearestDist >= 0.0f
-            && s_fpEnemyNearestDist < s_fpEnemyClearRadius)
+        float t = s_fpEnemyNearestDist / s_fpEnemyClearRadius;
+        enemyScale = s_fpEnemyClearMinScale
+                   + t * (1.0f - s_fpEnemyClearMinScale);
+    }
+    s_fpEnemyClearSmooth += (enemyScale - s_fpEnemyClearSmooth) * 0.15f;
+}
+
+static Ogre::Vector3 fpBoneEye(CharMovement* mvFP, bool fpMoving, const Ogre::Vector3& headWorld)
+{
+    // Pushed forward along yaw only, so looking down does not sink the eye into the chest.
+    {
+        ULONGLONG nowF = GetTickCount64();
+        float dt = (s_fpFeetTickMs > 0) ? (float)(nowF - s_fpFeetTickMs) * 0.001f : 0.0f;
+        s_fpFeetTickMs = nowF;
+        if (dt > 0.001f && dt < 0.25f && s_fpHaveLastFeet)
         {
-            float t = s_fpEnemyNearestDist / s_fpEnemyClearRadius;
-            enemyScale = s_fpEnemyClearMinScale
-                       + t * (1.0f - s_fpEnemyClearMinScale);
+            float dfx = mvFP->pos.x - s_fpLastFeetX;
+            float dfz = mvFP->pos.z - s_fpLastFeetZ;
+            float inst = sqrtf(dfx*dfx + dfz*dfz) / dt;
+            if (inst > 400.0f) inst = 400.0f;   // reject teleport/paging jumps
+            s_fpMoveSpeed += (inst - s_fpMoveSpeed) * 0.20f;
+            float vy = (mvFP->pos.y - s_fpLastFeetY) / dt;
+            if (vy >  60.0f) vy =  60.0f;        // reject teleport/paging jumps
+            else if (vy < -60.0f) vy = -60.0f;
+            s_fpClimbSpeedSmooth += (vy - s_fpClimbSpeedSmooth) * 0.20f;
         }
-        s_fpEnemyClearSmooth += (enemyScale - s_fpEnemyClearSmooth) * 0.15f;
+        s_fpLastFeetX = mvFP->pos.x; s_fpLastFeetZ = mvFP->pos.z;
+        s_fpLastFeetY = mvFP->pos.y; s_fpHaveLastFeet = true;
+    }
+    float lead = 0.0f;
+    if (s_fpMoveForward > 0.0f && s_fpMoveSpeedRef > 1.0f)
+    {
+        float gait = s_fpMoveSpeed / s_fpMoveSpeedRef;
+        if (gait < 0.0f) gait = 0.0f; else if (gait > 1.25f) gait = 1.25f;
+        lead = s_fpMoveForward * gait;
+    }
+    s_fpMoveFwdSmooth += (lead - s_fpMoveFwdSmooth) * 0.15f;
+
+    float ascent01 = (s_fpClimbSpeedSmooth > 0.0f)
+                   ? s_fpClimbSpeedSmooth * s_fpStairForwardReduce : 0.0f;
+    if (ascent01 > 1.0f) ascent01 = 1.0f;
+    float ascentScale = 1.0f - ascent01 * (1.0f - s_fpStairForwardMinScale);
+    float stairLift   = s_fpStairEyeLift * ascent01;
+
+    // Must update on this path too: it drives the MoveNearClip blend.
+    {
+        float leanTarget = (s_fpMoveSpeedRef > 1.0f)
+                         ? s_fpMoveSpeed / s_fpMoveSpeedRef : 0.0f;
+        if (leanTarget > 1.0f) leanTarget = 1.0f;
+        s_fpMoveLeanSmooth += (leanTarget - s_fpMoveLeanSmooth) * 0.12f;
     }
 
-    // Horizontal position is hard-attached so a sprinting model cannot outrun the camera.
-    Ogre::Vector3 eye;
-    Ogre::Vector3 headWorld;
-    if (fpGetHeadWorld(headWorld))
+    float fwdScale = ascentScale * s_fpEnemyClearSmooth;
+    if (g_log.debugLogging)
     {
-      if (s_fpTrueBoneEye)
-      {
-        // Pushed forward along yaw only, so looking down does not sink the eye into the chest.
-        {
-            ULONGLONG nowF = GetTickCount64();
-            float dt = (s_fpFeetTickMs > 0) ? (float)(nowF - s_fpFeetTickMs) * 0.001f : 0.0f;
-            s_fpFeetTickMs = nowF;
-            if (dt > 0.001f && dt < 0.25f && s_fpHaveLastFeet)
-            {
-                float dfx = mvFP->pos.x - s_fpLastFeetX;
-                float dfz = mvFP->pos.z - s_fpLastFeetZ;
-                float inst = sqrtf(dfx*dfx + dfz*dfz) / dt;
-                if (inst > 400.0f) inst = 400.0f;   // reject teleport/paging jumps
-                s_fpMoveSpeed += (inst - s_fpMoveSpeed) * 0.20f;
-                float vy = (mvFP->pos.y - s_fpLastFeetY) / dt;
-                if (vy >  60.0f) vy =  60.0f;        // reject teleport/paging jumps
-                else if (vy < -60.0f) vy = -60.0f;
-                s_fpClimbSpeedSmooth += (vy - s_fpClimbSpeedSmooth) * 0.20f;
-            }
-            s_fpLastFeetX = mvFP->pos.x; s_fpLastFeetZ = mvFP->pos.z;
-            s_fpLastFeetY = mvFP->pos.y; s_fpHaveLastFeet = true;
-        }
-        float lead = 0.0f;
-        if (s_fpMoveForward > 0.0f && s_fpMoveSpeedRef > 1.0f)
-        {
-            float gait = s_fpMoveSpeed / s_fpMoveSpeedRef;
-            if (gait < 0.0f) gait = 0.0f; else if (gait > 1.25f) gait = 1.25f;
-            lead = s_fpMoveForward * gait;
-        }
-        s_fpMoveFwdSmooth += (lead - s_fpMoveFwdSmooth) * 0.15f;
+        static ULONGLONG t = 0; ULONGLONG n = GetTickCount64();
+        if (n - t >= 500) { t = n; char b[112];
+            sprintf_s(b, sizeof(b),
+                "[WASDCombat] dc_fp_stair climb=%.2f scale=%.2f lift=%.2f",
+                s_fpClimbSpeedSmooth, ascentScale, stairLift);
+            DebugLog(b); }
+    }
 
-        float ascent01 = (s_fpClimbSpeedSmooth > 0.0f)
-                       ? s_fpClimbSpeedSmooth * s_fpStairForwardReduce : 0.0f;
-        if (ascent01 > 1.0f) ascent01 = 1.0f;
-        float ascentScale = 1.0f - ascent01 * (1.0f - s_fpStairForwardMinScale);
-        float stairLift   = s_fpStairEyeLift * ascent01;
+    Ogre::Vector3 eye = headWorld;
+    eye.y += -s_fpEyeDrop + s_fpEyeUpAdjust + stairLift;
+    Ogre::Vector3 fwd(-sinf(s_fpYawSm), 0.0f, -cosf(s_fpYawSm));
+    eye += fwd * ((s_fpFwdOffset + s_fpMoveFwdSmooth) * fwdScale);
 
-        // Must update on this path too: it drives the MoveNearClip blend.
+    {
+        float gaitTarget = 0.0f;
+        if (fpMoving)
         {
-            float leanTarget = (s_fpMoveSpeedRef > 1.0f)
-                             ? s_fpMoveSpeed / s_fpMoveSpeedRef : 0.0f;
-            if (leanTarget > 1.0f) leanTarget = 1.0f;
-            s_fpMoveLeanSmooth += (leanTarget - s_fpMoveLeanSmooth) * 0.12f;
+            MoveSpeed g = mvFP->speedOrders;
+            if (g == JOG) gaitTarget = s_fpJogForward;
+            else if (g == RUN || g == GROUPED) gaitTarget = s_fpRunForward;
         }
+        s_fpGaitFwdSmooth += (gaitTarget - s_fpGaitFwdSmooth) * 0.10f;
+        if (s_fpGaitFwdSmooth > 0.001f) eye += fwd * (s_fpGaitFwdSmooth * fwdScale);
+    }
+    {
+        bool actionNow = s_fpActionClearFwd > 0.0f && isCommittedAction(s_freeMoveAnchor);
+        float clrTarget = actionNow ? s_fpActionClearFwd : 0.0f;
+        s_fpActionClrSmooth += (clrTarget - s_fpActionClrSmooth) * 0.15f;
+        if (s_fpActionClrSmooth > 0.001f) eye += fwd * (s_fpActionClrSmooth * fwdScale);
+    }
+    return eye;
+}
 
-        float fwdScale = ascentScale * s_fpEnemyClearSmooth;
-        if (g_log.debugLogging)
-        {
-            static ULONGLONG t = 0; ULONGLONG n = GetTickCount64();
-            if (n - t >= 500) { t = n; char b[112];
-                sprintf_s(b, sizeof(b),
-                    "[WASDCombat] dc_fp_stair climb=%.2f scale=%.2f lift=%.2f",
-                    s_fpClimbSpeedSmooth, ascentScale, stairLift);
-                DebugLog(b); }
-        }
-
-        eye    = headWorld;
-        eye.y += -s_fpEyeDrop + s_fpEyeUpAdjust + stairLift;
-        Ogre::Vector3 fwd(-sinf(s_fpYawSm), 0.0f, -cosf(s_fpYawSm));
-        eye += fwd * ((s_fpFwdOffset + s_fpMoveFwdSmooth) * fwdScale);
-
-        {
-            float gaitTarget = 0.0f;
-            if (fpMoving)
-            {
-                MoveSpeed g = mvFP->speedOrders;
-                if (g == JOG) gaitTarget = s_fpJogForward;
-                else if (g == RUN || g == GROUPED) gaitTarget = s_fpRunForward;
-            }
-            s_fpGaitFwdSmooth += (gaitTarget - s_fpGaitFwdSmooth) * 0.10f;
-            if (s_fpGaitFwdSmooth > 0.001f) eye += fwd * (s_fpGaitFwdSmooth * fwdScale);
-        }
-        {
-            bool actionNow = s_fpActionClearFwd > 0.0f && isCommittedAction(s_freeMoveAnchor);
-            float clrTarget = actionNow ? s_fpActionClearFwd : 0.0f;
-            s_fpActionClrSmooth += (clrTarget - s_fpActionClrSmooth) * 0.15f;
-            if (s_fpActionClrSmooth > 0.001f) eye += fwd * (s_fpActionClrSmooth * fwdScale);
-        }
-      }
-      else
-      {
-        if (!s_fpHeadSmoothValid)
-        {
-            s_fpHeadSmooth      = headWorld;
-            s_fpHeadSmoothValid = true;
-        }
-        else
-        {
-            s_fpHeadSmooth.x  = headWorld.x;
-            s_fpHeadSmooth.z  = headWorld.z;
-            s_fpHeadSmooth.y += (headWorld.y - s_fpHeadSmooth.y) * FP_BONE_SMOOTH;
-        }
-        // At jog/sprint the model pitches forward into view, so raise and push the eye with speed.
-        {
-            float spd = mvFP->currentMotion.length();
-            float leanTarget = spd * 0.04f;          // about 1.0 at jog speed
-            if (leanTarget > 1.0f) leanTarget = 1.0f;
-            s_fpMoveLeanSmooth += (leanTarget - s_fpMoveLeanSmooth) * 0.12f;
-        }
-        float leanUp  = s_fpMoveLeanUp  * s_fpMoveLeanSmooth;
-        float leanFwd = s_fpMoveLeanFwd * s_fpMoveLeanSmooth;
-        eye = s_fpHeadSmooth
-            + q * Ogre::Vector3(0.0f, s_fpBoneEyeUp + s_fpEyeUpAdjust + leanUp,
-                                -((s_fpFwdOffset + leanFwd) * s_fpEnemyClearSmooth));
-
-        // The bone pose lags a frame; lead along view forward only, as lateral leads made strafing twitch.
-        {
-            static ULONGLONG s_fpLastTickMs = 0;
-            ULONGLONG nowFF = GetTickCount64();
-            float dt = (s_fpLastTickMs > 0)
-                     ? (float)(nowFF - s_fpLastTickMs) * 0.001f : 0.0f;
-            s_fpLastTickMs = nowFF;
-            if (dt > 0.05f) dt = 0.05f;
-            Ogre::Vector3 vel = mvFP->currentMotion;
-            vel.y = 0.0f;
-            Ogre::Vector3 viewFwd(-sinf(s_fpYawSm), 0.0f, -cosf(s_fpYawSm));
-            float fwdComp = vel.dotProduct(viewFwd);
-            if (fwdComp > 0.0f)
-                eye += viewFwd * (fwdComp * dt);
-        }
-
-        // Keyed off the gait tier because the currentMotion magnitude is too noisy.
-        {
-            float gaitTarget = 0.0f;
-            if (fpMoving)
-            {
-                MoveSpeed gait = mvFP->speedOrders;
-                if (gait == JOG)      gaitTarget = s_fpJogForward;
-                // GROUPED is the squad-follow sprint, so it gets the same fix as RUN.
-                else if (gait == RUN || gait == GROUPED) gaitTarget = s_fpRunForward;
-            }
-            s_fpGaitFwdSmooth += (gaitTarget - s_fpGaitFwdSmooth) * 0.10f;
-            if (s_fpGaitFwdSmooth > 0.001f)
-            {
-                Ogre::Vector3 fwdDir(-sinf(s_fpYawSm), 0.0f, -cosf(s_fpYawSm));
-                eye += fwdDir * (s_fpGaitFwdSmooth * s_fpEnemyClearSmooth);
-            }
-        }
-
-        // Swings, blocks and get-ups push the body into the lens even while standing.
-        {
-            bool actionNow = s_fpActionClearFwd > 0.0f
-                          && isCommittedAction(s_freeMoveAnchor);
-            float clrTarget = actionNow ? s_fpActionClearFwd : 0.0f;
-            s_fpActionClrSmooth += (clrTarget - s_fpActionClrSmooth) * 0.15f;
-            if (s_fpActionClrSmooth > 0.001f)
-            {
-                Ogre::Vector3 fwdDir(-sinf(s_fpYawSm), 0.0f, -cosf(s_fpYawSm));
-                eye += fwdDir * (s_fpActionClrSmooth * s_fpEnemyClearSmooth);
-            }
-        }
-      }
+static Ogre::Vector3 fpSyntheticEye(CharMovement* mvFP, bool fpMoving, const Ogre::Vector3& headWorld,
+                                    const Ogre::Quaternion& q)
+{
+    if (!s_fpHeadSmoothValid)
+    {
+        s_fpHeadSmooth      = headWorld;
+        s_fpHeadSmoothValid = true;
     }
     else
     {
-        float speed   = mvFP->currentMotion.length();
-        float target  = speed * 0.04f;
-        if (target > 2.5f) target = 2.5f;
-        s_fpLeanFwd  += (target - s_fpLeanFwd) * 0.15f;
+        s_fpHeadSmooth.x  = headWorld.x;
+        s_fpHeadSmooth.z  = headWorld.z;
+        s_fpHeadSmooth.y += (headWorld.y - s_fpHeadSmooth.y) * FP_BONE_SMOOTH;
+    }
+    // At jog/sprint the model pitches forward into view, so raise and push the eye with speed.
+    {
+        float spd = mvFP->currentMotion.length();
+        float leanTarget = spd * 0.04f;          // about 1.0 at jog speed
+        if (leanTarget > 1.0f) leanTarget = 1.0f;
+        s_fpMoveLeanSmooth += (leanTarget - s_fpMoveLeanSmooth) * 0.12f;
+    }
+    float leanUp  = s_fpMoveLeanUp  * s_fpMoveLeanSmooth;
+    float leanFwd = s_fpMoveLeanFwd * s_fpMoveLeanSmooth;
+    Ogre::Vector3 eye = s_fpHeadSmooth
+        + q * Ogre::Vector3(0.0f, s_fpBoneEyeUp + s_fpEyeUpAdjust + leanUp,
+                            -((s_fpFwdOffset + leanFwd) * s_fpEnemyClearSmooth));
 
-        Ogre::Vector3 neck = mvFP->pos;
-        neck.y += (s_fpEyeHeight - FP_HEAD_LEN);
-        eye = neck
-            + q * Ogre::Vector3(0.0f, FP_HEAD_LEN,
-                                -(s_fpFwdOffset + s_fpLeanFwd));
+    // The bone pose lags a frame; lead along view forward only, as lateral leads made strafing twitch.
+    {
+        static ULONGLONG s_fpLastTickMs = 0;
+        ULONGLONG nowFF = GetTickCount64();
+        float dt = (s_fpLastTickMs > 0)
+                 ? (float)(nowFF - s_fpLastTickMs) * 0.001f : 0.0f;
+        s_fpLastTickMs = nowFF;
+        if (dt > 0.05f) dt = 0.05f;
+        Ogre::Vector3 vel = mvFP->currentMotion;
+        vel.y = 0.0f;
+        Ogre::Vector3 viewFwd(-sinf(s_fpYawSm), 0.0f, -cosf(s_fpYawSm));
+        float fwdComp = vel.dotProduct(viewFwd);
+        if (fwdComp > 0.0f)
+            eye += viewFwd * (fwdComp * dt);
     }
 
+    // Keyed off the gait tier because the currentMotion magnitude is too noisy.
+    {
+        float gaitTarget = 0.0f;
+        if (fpMoving)
+        {
+            MoveSpeed gait = mvFP->speedOrders;
+            if (gait == JOG)      gaitTarget = s_fpJogForward;
+            // GROUPED is the squad-follow sprint, so it gets the same fix as RUN.
+            else if (gait == RUN || gait == GROUPED) gaitTarget = s_fpRunForward;
+        }
+        s_fpGaitFwdSmooth += (gaitTarget - s_fpGaitFwdSmooth) * 0.10f;
+        if (s_fpGaitFwdSmooth > 0.001f)
+        {
+            Ogre::Vector3 fwdDir(-sinf(s_fpYawSm), 0.0f, -cosf(s_fpYawSm));
+            eye += fwdDir * (s_fpGaitFwdSmooth * s_fpEnemyClearSmooth);
+        }
+    }
+
+    // Swings, blocks and get-ups push the body into the lens even while standing.
+    {
+        bool actionNow = s_fpActionClearFwd > 0.0f
+                      && isCommittedAction(s_freeMoveAnchor);
+        float clrTarget = actionNow ? s_fpActionClearFwd : 0.0f;
+        s_fpActionClrSmooth += (clrTarget - s_fpActionClrSmooth) * 0.15f;
+        if (s_fpActionClrSmooth > 0.001f)
+        {
+            Ogre::Vector3 fwdDir(-sinf(s_fpYawSm), 0.0f, -cosf(s_fpYawSm));
+            eye += fwdDir * (s_fpActionClrSmooth * s_fpEnemyClearSmooth);
+        }
+    }
+    return eye;
+}
+
+static Ogre::Vector3 fpNeckModelEye(CharMovement* mvFP, const Ogre::Quaternion& q)
+{
+    float speed   = mvFP->currentMotion.length();
+    float target  = speed * 0.04f;
+    if (target > 2.5f) target = 2.5f;
+    s_fpLeanFwd  += (target - s_fpLeanFwd) * 0.15f;
+
+    Ogre::Vector3 neck = mvFP->pos;
+    neck.y += (s_fpEyeHeight - FP_HEAD_LEN);
+    Ogre::Vector3 eye = neck
+        + q * Ogre::Vector3(0.0f, FP_HEAD_LEN,
+                            -(s_fpFwdOffset + s_fpLeanFwd));
+    return eye;
+}
+
+static Ogre::Vector3 fpComputeEye(CharMovement* mvFP, bool fpMoving, const Ogre::Quaternion& q)
+{
+    Ogre::Vector3 headWorld;
+    if (fpGetHeadWorld(headWorld))
+    {
+        if (s_fpTrueBoneEye)
+            return fpBoneEye(mvFP, fpMoving, headWorld);
+        return fpSyntheticEye(mvFP, fpMoving, headWorld, q);
+    }
+    return fpNeckModelEye(mvFP, q);
+}
+
+static void fpPlaceCamera(CameraClass* thisptr, const Ogre::Vector3& eye, const Ogre::Quaternion& q,
+                          bool fpMoving)
+{
     if (s_fpNode)
     {
         Ogre::Vector3 camPos = eye;
@@ -780,4 +790,32 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
         thisptr->center->_setDerivedPosition(eyeWorld);
         thisptr->center->_getDerivedPositionUpdated();
     }
+}
+
+// Runs from cameraUpdate_hook AFTER the game's camera update.
+static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
+{
+    if (s_mode != MODE_FREE_MOVE || !s_freeMoveAnchor
+        || !s_freeMoveAnchor->movement || s_lootUiSuspendActive)
+    {
+        exitFirstPerson(true);
+        return;
+    }
+
+    fpUpdateMouseLook(uiOpen);
+
+    CharMovement* mvFP = s_freeMoveAnchor->movement;
+
+    // currentlyMoving covers point-click and autonomous movement, not only WASD.
+    bool fpMoving = mvFP->currentlyMoving || mvFP->currentSpeed > 0.25f;
+
+    fpUpdateBodyYaw(mvFP, fpMoving);
+    Ogre::Quaternion q = fpSmoothedViewRotation();
+
+    // A close hostile pulls the eye back so it does not enter the aggressor's model.
+    fpUpdateEnemyClearance();
+
+    // Horizontal position is hard-attached so a sprinting model cannot outrun the camera.
+    Ogre::Vector3 eye = fpComputeEye(mvFP, fpMoving, q);
+    fpPlaceCamera(thisptr, eye, q, fpMoving);
 }

@@ -1,18 +1,5 @@
-// Runs AFTER the game's camera update and BEFORE render: only writes here survive to the frame.
-static void (*s_cameraUpdateOrig)(CameraClass* thisptr, bool controlEnabled);
-static void cameraUpdate_hook(CameraClass* thisptr, bool controlEnabled)
+static void camUpdPreOrigDrive(CameraClass* thisptr, bool controlEnabled)
 {
-    if (s_fpActive || s_firstPersonActive)
-        thisptr->isRotating = false;
-
-    // Force rotate ON only, never OFF, so vanilla MMB hold-to-rotate still works.
-    if (s_mode == MODE_FREE_MOVE && !s_fpActive && !s_firstPersonActive && s_camRotateToggle && key)
-        key->rotate = true;
-
-    // controlEnabled=false stops zoom and pan moving the detached camera before name-tags lay out.
-    bool ctlEnabled = (s_fpActive || s_firstPersonActive) ? false : controlEnabled;
-
-    // The pre-orig drive stops grass blinking; the second drive reads a zero mouse delta.
     if (s_fpCamPreOrig && s_firstPersonActive && ou && ou->player
         && thisptr == ou->player->camera && !ou->isLoadingFromASaveGame())
     {
@@ -23,10 +10,11 @@ static void cameraUpdate_hook(CameraClass* thisptr, bool controlEnabled)
                                || gui->isPaused() || gui->isAnyInventoryWindowOpen()));
         fpDriveFrame(thisptr, uiPre);
     }
+}
 
-    s_cameraUpdateOrig(thisptr, ctlEnabled);
-
-    // Only mark pending: the scene may be freed, and the load flags stay set through character creation.
+// Only mark pending: the scene may be freed, and the load flags stay set through character creation.
+static bool camUpdLeaveFreeingScene()
+{
     bool sceneFreeing = !ou || ou->isLoadingFromASaveGame();
     if (sceneFreeing)
     {
@@ -45,10 +33,14 @@ static void cameraUpdate_hook(CameraClass* thisptr, bool controlEnabled)
                 s_fpOptRangeSaved     = false;
             }
         }
-        return;
+        return true;
     }
+    return false;
+}
 
-    // thisptr is a valid camera even when ou->player is null, so restore through thisptr.
+// thisptr is a valid camera even when ou->player is null, so restore through thisptr.
+static bool camUpdRestoreAfterLoad(CameraClass* thisptr)
+{
     if (s_otsRestorePending)
     {
         s_otsRestorePending = false;
@@ -58,14 +50,14 @@ static void cameraUpdate_hook(CameraClass* thisptr, bool controlEnabled)
             ou->player->startTrackCharacter(s_freeMoveAnchor);
         otsRestoreNames();
         DebugLog("[WASDCombat] dc_cam_restored_after_load");
-        return;
+        return true;
     }
+    return false;
+}
 
-    // Inventory portrait cameras also call this hook and must not drive the detached camera.
-    if (!ou || !ou->player || thisptr != ou->player->camera)
-        return;
-
-    // The world map and stats window do not clear controlEnabled, so they are checked explicitly.
+// The world map and stats window do not clear controlEnabled, so they are checked explicitly.
+static bool camUpdTrackUiOpen(CameraClass* thisptr, bool controlEnabled)
+{
     ManagementScreen* mgmt = ManagementScreen::getSingleton();
     bool mgmtOpen = (mgmt && mgmt->getVisible());
     bool statsOpen = (gui && gui->isStatsWindowOpen());
@@ -79,111 +71,99 @@ static void cameraUpdate_hook(CameraClass* thisptr, bool controlEnabled)
         thisptr->isRotating  = false;
     }
     s_camRotateUiOpen = uiOpenNow;
+    return uiOpenNow;
+}
 
+static bool camUpdSwitchFaceCam()
+{
+    // Mode, anchor and window count blip during a squad switch, so only a true teardown exits at once.
+    bool hardStop  = s_dcShutdownInProgress || s_loadGuardActive;
+    // Combat is a hard exit, so one flicker-false frame cannot latch the face-cam.
+    ULONGLONG nowFC      = GetTickCount64();
+    bool inCombatNow     = s_freeMoveAnchor
+                        && s_freeMoveAnchor->isInCombatMode(true, true);
+    if (inCombatNow) s_lastInCombatMs = nowFC;
+    bool inCombatRecent  = inCombatNow
+                        || (s_lastInCombatMs > 0
+                            && nowFC - s_lastInCombatMs < FACECAM_COMBAT_GRACE_MS);
+
+    bool softOK    = s_settingInventoryFaceCam
+                  && s_mode == MODE_FREE_MOVE
+                  && s_freeMoveAnchor && s_freeMoveAnchor->movement
+                  && isOwnInventoryOpen();
+
+    bool faceCamWanted;
+    if (hardStop || inCombatRecent)
     {
-        // Mode, anchor and window count blip during a squad switch, so only a true teardown exits at once.
-        bool hardStop  = s_dcShutdownInProgress || s_loadGuardActive;
-        // Combat is a hard exit, so one flicker-false frame cannot latch the face-cam.
-        ULONGLONG nowFC      = GetTickCount64();
-        bool inCombatNow     = s_freeMoveAnchor
-                            && s_freeMoveAnchor->isInCombatMode(true, true);
-        if (inCombatNow) s_lastInCombatMs = nowFC;
-        bool inCombatRecent  = inCombatNow
-                            || (s_lastInCombatMs > 0
-                                && nowFC - s_lastInCombatMs < FACECAM_COMBAT_GRACE_MS);
-
-        bool softOK    = s_settingInventoryFaceCam
-                      && s_mode == MODE_FREE_MOVE
-                      && s_freeMoveAnchor && s_freeMoveAnchor->movement
-                      && isOwnInventoryOpen();
-
-        bool faceCamWanted;
-        if (hardStop || inCombatRecent)
-        {
-            faceCamWanted        = false;
-            s_invFaceCloseStreak = INV_FACE_CLOSE_DEBOUNCE;
-        }
-        else if (softOK)
-        {
-            faceCamWanted        = true;
-            s_invFaceCloseStreak = 0;
-        }
-        else
-        {
-            if (s_invFaceCloseStreak < INV_FACE_CLOSE_DEBOUNCE)
-                s_invFaceCloseStreak++;
-            faceCamWanted = s_fpActive && s_invFaceCloseStreak < INV_FACE_CLOSE_DEBOUNCE;
-        }
-
-        if (s_firstPersonActive && faceCamWanted)
-        {
-            exitFirstPerson(true);
-            s_fpSuspendedForInv = true;
-        }
-
-        if (faceCamWanted && !s_fpActive && !s_firstPersonActive)
-            enterOTS();
-        else if (!faceCamWanted && s_fpActive)
-        {
-            exitOTS(true);
-            if (s_fpSuspendedForInv)
-            {
-                s_fpSuspendedForInv = false;
-                enterFirstPerson();
-            }
-            return;
-        }
+        faceCamWanted        = false;
+        s_invFaceCloseStreak = INV_FACE_CLOSE_DEBOUNCE;
+    }
+    else if (softOK)
+    {
+        faceCamWanted        = true;
+        s_invFaceCloseStreak = 0;
+    }
+    else
+    {
+        if (s_invFaceCloseStreak < INV_FACE_CLOSE_DEBOUNCE)
+            s_invFaceCloseStreak++;
+        faceCamWanted = s_fpActive && s_invFaceCloseStreak < INV_FACE_CLOSE_DEBOUNCE;
     }
 
-    // Debounce edges can clear s_fpActive without returning to first person, stranding the player top-down.
-    if (s_fpSuspendedForInv && !s_fpActive && !s_firstPersonActive
-        && s_mode == MODE_FREE_MOVE && !s_lootUiSuspendActive
-        && s_freeMoveAnchor && s_freeMoveAnchor->movement
-        && !isOwnInventoryOpen())
+    if (s_firstPersonActive && faceCamWanted)
     {
-        s_fpSuspendedForInv = false;
-        enterFirstPerson();
-        return;
+        exitFirstPerson(true);
+        s_fpSuspendedForInv = true;
     }
 
-    if (!s_fpActive && !s_firstPersonActive)
-        return;
-
-    if (s_firstPersonActive)
+    if (faceCamWanted && !s_fpActive && !s_firstPersonActive)
+        enterOTS();
+    else if (!faceCamWanted && s_fpActive)
     {
-        // restrictPosition never runs in first person, so sync the floor here or upper floors do not load.
-        if (s_freeMoveAnchor && s_freeMoveAnchor->movement)
+        exitOTS(true);
+        if (s_fpSuspendedForInv)
         {
-            int anchorFloor = s_freeMoveAnchor->movement->getCurrentFloor();
-            if (anchorFloor != ou->player->getCurrentFloor())
+            s_fpSuspendedForInv = false;
+            enterFirstPerson();
+        }
+        return true;
+    }
+    return false;
+}
+
+static void camUpdDriveFirstPerson(CameraClass* thisptr, bool uiOpenNow)
+{
+    // restrictPosition never runs in first person, so sync the floor here or upper floors do not load.
+    if (s_freeMoveAnchor && s_freeMoveAnchor->movement)
+    {
+        int anchorFloor = s_freeMoveAnchor->movement->getCurrentFloor();
+        if (anchorFloor != ou->player->getCurrentFloor())
+        {
+            ou->player->setCurrentFloor(anchorFloor);
+            if (g_log.debugLogging)
             {
-                ou->player->setCurrentFloor(anchorFloor);
-                if (g_log.debugLogging)
-                {
-                    char fbuf[80];
-                    sprintf_s(fbuf, sizeof(fbuf),
-                        "[WASDCombat] dc_fp_floor_sync floor=%d", anchorFloor);
-                    DebugLog(fbuf);
-                }
+                char fbuf[80];
+                sprintf_s(fbuf, sizeof(fbuf),
+                    "[WASDCombat] dc_fp_floor_sync floor=%d", anchorFloor);
+                DebugLog(fbuf);
             }
         }
-        ou->player->updateFloorVisibility(ou->player->getAllPlayerCharacters());
-        // The squad-based pass leaves black voids below a solo anchor; the Building* is only null-checked.
-        if (s_freeMoveAnchor && s_freeMoveAnchor->movement)
-        {
-            if (s_freeMoveAnchor->movement->building.getBuilding() == nullptr)
-                ou->player->resetFloorsVisibility();
-            else if (s_fpFloorRevealBelow)
-                ou->player->setFloorsVisibility(
-                    s_freeMoveAnchor->movement->getCurrentFloor());
-        }
-        fpDriveFrame(thisptr, uiOpenNow);
-        return;
     }
+    ou->player->updateFloorVisibility(ou->player->getAllPlayerCharacters());
+    // The squad-based pass leaves black voids below a solo anchor; the Building* is only null-checked.
+    if (s_freeMoveAnchor && s_freeMoveAnchor->movement)
+    {
+        if (s_freeMoveAnchor->movement->building.getBuilding() == nullptr)
+            ou->player->resetFloorsVisibility();
+        else if (s_fpFloorRevealBelow)
+            ou->player->setFloorsVisibility(
+                s_freeMoveAnchor->movement->getCurrentFloor());
+    }
+    fpDriveFrame(thisptr, uiOpenNow);
+}
 
-    // The wheel still zooms inside orig and scales the name-tags, so hold the saved altitude.
-    thisptr->altitude = s_otsSavedAltitude;
-
+static void camUpdFaceCamMouseLook()
+{
     bool ctxVisible = ou->player->contextMenu.isVisible();
     bool anchorKO   = s_freeMoveAnchor->isUnconcious();
     // inDialogue also covers the prisoner and bail dialogue windows, which need the cursor.
@@ -227,69 +207,71 @@ static void cameraUpdate_hook(CameraClass* thisptr, bool controlEnabled)
     {
         s_fpCursorCaptured = false;
     }
+}
 
-    CharMovement* mvFP = s_freeMoveAnchor->movement;
-
+static void camUpdInventoryFace()
+{
+    bool ownInv = isOwnInventoryOpen();
+    // Clicking portraits with the inventory open changes the selection, never control.
+    Character* invTarget = nullptr;
+    if (ownInv)
     {
-        bool ownInv = isOwnInventoryOpen();
-        // Clicking portraits with the inventory open changes the selection, never control.
-        Character* invTarget = nullptr;
-        if (ownInv)
-        {
-            // Recruited mod NPCs fail isPlayerCharacter(), so the open window's character comes first.
-            Character* invChar = gui ? gui->inventoryWindowCharacter.getCharacter() : nullptr;
-            if (invChar && invChar->movement)
-                invTarget = invChar;
-            else if (s_selectedCharacter && s_selectedCharacter->movement
-                     && s_selectedCharacter->isPlayerCharacter())
-                invTarget = s_selectedCharacter;
-            else
-                invTarget = s_freeMoveAnchor;
-        }
-
-        if (ownInv && (!s_otsInvFaceActive || s_otsInvFaceChar != invTarget))
-        {
-            if (!s_otsInvFaceActive)
-            {
-                s_otsSavedYaw   = s_fpYaw;
-                s_otsSavedPitch = s_fpPitch;
-                s_otsSavedDist  = s_otsDistCur;
-                DebugLog("[WASDCombat] dc_cam_inventory_face");
-            }
-            else
-            {
-                DebugLog("[WASDCombat] dc_cam_inventory_face_retargeted");
-            }
-            s_otsInvFaceActive = true;
-            s_otsInvFaceChar   = invTarget;
-
-            float faceYaw = s_fpYaw + 3.14159265f;
-            if (invTarget && invTarget->movement)
-            {
-                Ogre::Vector3 bd = invTarget->movement->direction;
-                bd.y = 0.0f;
-                float bl = bd.length();
-                if (bl > 0.001f)
-                {
-                    bd /= bl;
-                    faceYaw = atan2f(-bd.x, -bd.z) + 3.14159265f;
-                }
-            }
-            s_fpYaw      = faceYaw;
-            s_fpPitch    = -0.02f;
-            s_otsDistCur = 20.0f;
-        }
-        else if (!ownInv && s_otsInvFaceActive)
-        {
-            s_otsInvFaceActive = false;
-            s_otsInvFaceChar   = nullptr;
-            s_fpYaw      = s_otsSavedYaw;
-            s_fpPitch    = s_otsSavedPitch;
-            s_otsDistCur = s_otsSavedDist;
-            DebugLog("[WASDCombat] dc_cam_inventory_face_restored");
-        }
+        // Recruited mod NPCs fail isPlayerCharacter(), so the open window's character comes first.
+        Character* invChar = gui ? gui->inventoryWindowCharacter.getCharacter() : nullptr;
+        if (invChar && invChar->movement)
+            invTarget = invChar;
+        else if (s_selectedCharacter && s_selectedCharacter->movement
+                 && s_selectedCharacter->isPlayerCharacter())
+            invTarget = s_selectedCharacter;
+        else
+            invTarget = s_freeMoveAnchor;
     }
 
+    if (ownInv && (!s_otsInvFaceActive || s_otsInvFaceChar != invTarget))
+    {
+        if (!s_otsInvFaceActive)
+        {
+            s_otsSavedYaw   = s_fpYaw;
+            s_otsSavedPitch = s_fpPitch;
+            s_otsSavedDist  = s_otsDistCur;
+            DebugLog("[WASDCombat] dc_cam_inventory_face");
+        }
+        else
+        {
+            DebugLog("[WASDCombat] dc_cam_inventory_face_retargeted");
+        }
+        s_otsInvFaceActive = true;
+        s_otsInvFaceChar   = invTarget;
+
+        float faceYaw = s_fpYaw + 3.14159265f;
+        if (invTarget && invTarget->movement)
+        {
+            Ogre::Vector3 bd = invTarget->movement->direction;
+            bd.y = 0.0f;
+            float bl = bd.length();
+            if (bl > 0.001f)
+            {
+                bd /= bl;
+                faceYaw = atan2f(-bd.x, -bd.z) + 3.14159265f;
+            }
+        }
+        s_fpYaw      = faceYaw;
+        s_fpPitch    = -0.02f;
+        s_otsDistCur = 20.0f;
+    }
+    else if (!ownInv && s_otsInvFaceActive)
+    {
+        s_otsInvFaceActive = false;
+        s_otsInvFaceChar   = nullptr;
+        s_fpYaw      = s_otsSavedYaw;
+        s_fpPitch    = s_otsSavedPitch;
+        s_otsDistCur = s_otsSavedDist;
+        DebugLog("[WASDCombat] dc_cam_inventory_face_restored");
+    }
+}
+
+static void camUpdAimFaceCam()
+{
     // Recomputed every frame: an edge-triggered aim left a stale yaw on a re-open.
     Character* tgt = nullptr;
     {
@@ -318,6 +300,70 @@ static void cameraUpdate_hook(CameraClass* thisptr, bool controlEnabled)
         s_fpNode->setPosition(eye);
         s_fpNode->setOrientation(q);
     }
+}
+
+// Runs AFTER the game's camera update and BEFORE render: only writes here survive to the frame.
+static void (*s_cameraUpdateOrig)(CameraClass* thisptr, bool controlEnabled);
+static void cameraUpdate_hook(CameraClass* thisptr, bool controlEnabled)
+{
+    if (s_fpActive || s_firstPersonActive)
+        thisptr->isRotating = false;
+
+    // Force rotate ON only, never OFF, so vanilla MMB hold-to-rotate still works.
+    if (s_mode == MODE_FREE_MOVE && !s_fpActive && !s_firstPersonActive && s_camRotateToggle && key)
+        key->rotate = true;
+
+    // controlEnabled=false stops zoom and pan moving the detached camera before name-tags lay out.
+    bool ctlEnabled = (s_fpActive || s_firstPersonActive) ? false : controlEnabled;
+
+    // The pre-orig drive stops grass blinking; the second drive reads a zero mouse delta.
+    camUpdPreOrigDrive(thisptr, controlEnabled);
+
+    s_cameraUpdateOrig(thisptr, ctlEnabled);
+
+    if (camUpdLeaveFreeingScene())
+        return;
+    if (camUpdRestoreAfterLoad(thisptr))
+        return;
+
+    // Inventory portrait cameras also call this hook and must not drive the detached camera.
+    if (!ou || !ou->player || thisptr != ou->player->camera)
+        return;
+
+    bool uiOpenNow = camUpdTrackUiOpen(thisptr, controlEnabled);
+    if (camUpdSwitchFaceCam())
+        return;
+
+    // Debounce edges can clear s_fpActive without returning to first person, stranding the player top-down.
+    if (s_fpSuspendedForInv && !s_fpActive && !s_firstPersonActive
+        && s_mode == MODE_FREE_MOVE && !s_lootUiSuspendActive
+        && s_freeMoveAnchor && s_freeMoveAnchor->movement
+        && !isOwnInventoryOpen())
+    {
+        s_fpSuspendedForInv = false;
+        enterFirstPerson();
+        return;
+    }
+
+    if (!s_fpActive && !s_firstPersonActive)
+        return;
+
+    if (s_firstPersonActive)
+    {
+        camUpdDriveFirstPerson(thisptr, uiOpenNow);
+        return;
+    }
+
+    // The wheel still zooms inside orig and scales the name-tags, so hold the saved altitude.
+    thisptr->altitude = s_otsSavedAltitude;
+
+    camUpdFaceCamMouseLook();
+
+    CharMovement* mvFP = s_freeMoveAnchor->movement;
+
+    camUpdInventoryFace();
+
+    camUpdAimFaceCam();
 }
 
 // Floor visibility refreshes only here, but the clamp yanks the detached view, so re-apply the pose.
