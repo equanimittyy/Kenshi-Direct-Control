@@ -29,7 +29,6 @@ CONTROLS
   P          Toggle first-person view (while Direct Control is on)
   SHIFT+C    Toggle sneak (while in first person)
   F          Hand control to the selected squad member
-  X          Cycle speed (Walk / Jog / Run)
   CTRL       Hands-free camera-look toggle
   Dbl-click  Switch control via a squad portrait
 
@@ -91,9 +90,6 @@ FEATURES
     Hold WASD while sitting, lying in a bed, or operating a
     workstation and your character stands up and walks off.
 
-  Speed toggle
-    X cycles Walk / Jog / Run using the game's own speed system.
-
   Per-character control
     Direct Control follows your selected character; switch any time
     with F or a double-click.
@@ -136,8 +132,8 @@ CONFIG  (WASDCombatPlugin.ini in the mod folder)
     F1..F24, SPACE, TAB, SHIFT, CONTROL, arrow keys, NUMPAD0..9,
     or OEM_1..8 for international layouts. Bad entries fall back
     to the default. Sneak is always SHIFT + the SneakToggle key.
-    The DC Toggle and Speed Cycle can also be rebound in-game
-    under Options > Controls (those take priority).
+    The DC Toggle can also be rebound in-game under
+    Options > Controls (that binding takes priority).
 
   [Settings]
     InventoryFaceCam = true   (default)

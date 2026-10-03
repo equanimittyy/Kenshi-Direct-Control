@@ -50,7 +50,7 @@ The press handler ignores the Direct Combat key while `s_lootUiSuspendActive` is
 
 The default key is `/`. In the INI file it is `OEM_2`, which is the `/` key on a US layout; on other layouts `OEM_2` can be a different key. Check that Kenshi does not bind `/` by default.
 
-Register the key as a native command in the game Controls menu, the same way Direct Control registers `dc_toggle` and `dc_speed_cycle` (the `InputHandler::loadConfig`, `OptionsWindow::create`, and `OptionsWindow::saveOptions` hooks). Add an INI fallback in `[Keybinds]`, as Direct Control does for its own keys.
+Register the key as a native command in the game Controls menu, the same way Direct Control registers `dc_toggle` (the `InputHandler::loadConfig`, `OptionsWindow::create`, and `OptionsWindow::saveOptions` hooks). Add an INI fallback in `[Keybinds]`, as Direct Control does for its own keys.
 
 ### Block mode
 
@@ -151,7 +151,7 @@ The plugin is one file of 7,470 lines. The README says v1.3.1, but the startup l
 | `InputHandler::loadConfig` | Registers native keybinds in the game Controls menu. |
 | `OptionsWindow::create` | Adds the keybind rows to the Options window. |
 | `OptionsWindow::saveOptions` | Saves rebinds across restarts. |
-| `GameWorld::processKeys` | Receives the toggle and speed commands from the native keybind system. |
+| `GameWorld::processKeys` | Receives the toggle command from the native keybind system. |
 | `GameWorld::_NV_mainLoop_GPUSensitiveStuff` | Main-thread work: selection, mode changes, WASD before and after the AI update, job suppression. |
 | `CharMovement::_NV_update` | Applies WASD movement and holds it during committed combat animations. |
 | `CameraClass::update` | Drives the first-person camera and the inventory face-cam. |

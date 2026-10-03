@@ -24,7 +24,6 @@ Built for precise, hands-on control during combat, retreats, ambushes, city navi
 | `P` | Toggle first-person view (while Direct Control is on) |
 | `Shift`+`C` | Toggle sneak (while in first person) |
 | `F` | Hand control to the selected squad member |
-| `X` | Cycle speed (Walk / Jog / Run) |
 | `Ctrl` | Hands-free camera-look toggle |
 | Double-click portrait | Switch control via a squad portrait |
 
@@ -40,7 +39,6 @@ Single-click a portrait to select without taking control; `F` or a double-click 
 - **Move while you loot and trade** (optional) — turn the face-cam off to keep moving with WASD while an inventory or trade window is open. Walk away from a merchant and the trade closes on its own.
 - **Inventory face-cam** (on by default) — open a character's own inventory and the camera swings to face them so you can see equipped gear. Auto-disabled in combat so you can loot and disarm enemies freely.
 - **Get up and go** — hold WASD while sitting, lying in a bed, or operating a workstation and your character stands up and walks off.
-- **Speed toggle** — `X` cycles Walk / Jog / Run using the game's own speed system.
 - **Per-character control** — Direct Control follows your selected character; switch any time with `F` or a double-click.
 
 ## Installation
@@ -61,7 +59,7 @@ Or subscribe on the Steam Workshop and skip the manual copy.
 
 Edit `WASDCombatPlugin.ini` in the mod folder:
 
-- **`[Keybinds]`** — rebind any key. Valid names: letters (`W`), digits (`5`), `F1`..`F24`, `SPACE`, `TAB`, `SHIFT`, `CONTROL`, arrow keys, `NUMPAD0`..`9`, or `OEM_1`..`8` for international layouts. Sneak is always `Shift` + the SneakToggle key. The DC Toggle and Speed Cycle can also be rebound in-game under Options → Controls (those take priority).
+- **`[Keybinds]`** — rebind any key. Valid names: letters (`W`), digits (`5`), `F1`..`F24`, `SPACE`, `TAB`, `SHIFT`, `CONTROL`, arrow keys, `NUMPAD0`..`9`, or `OEM_1`..`8` for international layouts. Sneak is always `Shift` + the SneakToggle key. The DC Toggle can also be rebound in-game under Options → Controls (that binding takes priority).
 - **`[Settings]`**
   - `InventoryFaceCam = true` — camera faces your character on inventory so you can see worn gear. Set `false` to keep moving with WASD while looting/trading instead.
   - `WasdSpeedCap = true` — caps WASD movement at your character's real top speed (injuries, encumbrance, shackles all count, as vanilla). Set `false` to always move at full speed.

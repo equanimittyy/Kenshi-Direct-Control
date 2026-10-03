@@ -184,7 +184,6 @@ static volatile bool        s_wHeld  = false;
 static volatile bool        s_aHeld  = false;
 static volatile bool        s_sHeld  = false;
 static volatile bool        s_dHeld  = false;
-static volatile bool        s_xPressed = false;
 // RMB press edge — set by the poll thread, consumed on the main thread.
 // The earliest reliable player-click signal: pure input level, cannot be
 // blocked by any game-side dispatch path.  Used only to release the
@@ -331,12 +330,12 @@ static void setMode(ControlMode next)
 // is touched — movement, hold, point-click, camera, combat, and XP logic
 // are unchanged.
 // =======================================================================
-enum KeyRole { KR_FORWARD = 0, KR_LEFT, KR_BACK, KR_RIGHT, KR_TOGGLE, KR_SPEED, KR_SELECT, KR_FP, KR_SNEAK, KR_COUNT };
-static int s_bindVk[KR_COUNT] = { 'W', 'A', 'S', 'D', 'V', 'X', 'F', 'P', 'C' };  // defaults
+enum KeyRole { KR_FORWARD = 0, KR_LEFT, KR_BACK, KR_RIGHT, KR_TOGGLE, KR_SELECT, KR_FP, KR_SNEAK, KR_COUNT };
+static int s_bindVk[KR_COUNT] = { 'W', 'A', 'S', 'D', 'V', 'F', 'P', 'C' };  // defaults
 static const char* const KR_INI_KEY[KR_COUNT] =
-    { "MoveForward", "MoveLeft", "MoveBackward", "MoveRight", "ToggleDC", "SpeedCycle", "SelectControl", "FirstPerson", "SneakToggle" };
+    { "MoveForward", "MoveLeft", "MoveBackward", "MoveRight", "ToggleDC", "SelectControl", "FirstPerson", "SneakToggle" };
 static const char* const KR_DEFAULT[KR_COUNT] =
-    { "W", "A", "S", "D", "V", "X", "F", "P", "C" };
+    { "W", "A", "S", "D", "V", "F", "P", "C" };
 static char    s_bindCfgStr[KR_COUNT][32];  // resolved strings for the summary log
 static HMODULE s_thisModule = nullptr;      // captured in DllMain for the INI path
 
@@ -639,7 +638,7 @@ static const float FP_HEAD_LEN     = 1.8f;   // neck-pivot to eye (fallback mode
 static const float FP_BONE_SMOOTH  = 0.45f;  // per-frame height lerp (damps stride bob)
 
 // -----------------------------------------------------------------------
-// Native Controls-menu keybinds (v1.7.3) — TOGGLE + SPEED ONLY.
+// Native Controls-menu keybinds (v1.7.3) — TOGGLE ONLY.
 //
 // HARD CONSTRAINT learned in the field (2026-06-10): Kenshi's InputHandler
 // allows exactly ONE command per physical key.  Vanilla camera panning
@@ -652,8 +651,8 @@ static const float FP_BONE_SMOOTH  = 0.45f;  // per-frame height lerp (damps str
 //     polling (INI-configurable, v1.6 system); playerControl_hook already
 //     context-switches the camera keys during DC.  NEVER register
 //     dc_move_* commands in the InputHandler.
-//   - Toggle (V) and Speed (X) sit on keys vanilla leaves unbound — they
-//     are registered natively (KEP pattern) and rebindable in the
+//   - Toggle (V) sits on a key vanilla leaves unbound — it
+//     is registered natively (KEP pattern) and rebindable in the
 //     Controls menu.  Presses arrive via key->events in processKeys.
 // Evidence the game persists plugin commands when bound: toggle_devtools
 // =F12 (KEP) lives in controls.cfg; our dc_ lines were missing because
@@ -791,7 +790,6 @@ static void writeDefaultConfig(const char* path)
         "MoveBackward    = S\r\n"
         "MoveLeft        = A\r\n"
         "MoveRight       = D\r\n"
-        "SpeedCycle      = X\r\n"
         "SelectControl   = F\r\n"
         "FirstPerson     = P\r\n"
         "; Sneak is the chord SHIFT + this key, first-person only.\r\n"
@@ -1028,14 +1026,13 @@ static void loadKeybinds()
     char lbuf[420];
     sprintf_s(lbuf, sizeof(lbuf),
         "[WASDCombat] dc_keybinds_loaded toggle=%s(0x%02X) forward=%s(0x%02X)"
-        " back=%s(0x%02X) left=%s(0x%02X) right=%s(0x%02X) speed=%s(0x%02X)"
+        " back=%s(0x%02X) left=%s(0x%02X) right=%s(0x%02X)"
         " select=%s(0x%02X) inventoryFaceCam=%d",
         s_bindCfgStr[KR_TOGGLE],  s_bindVk[KR_TOGGLE],
         s_bindCfgStr[KR_FORWARD], s_bindVk[KR_FORWARD],
         s_bindCfgStr[KR_BACK],    s_bindVk[KR_BACK],
         s_bindCfgStr[KR_LEFT],    s_bindVk[KR_LEFT],
         s_bindCfgStr[KR_RIGHT],   s_bindVk[KR_RIGHT],
-        s_bindCfgStr[KR_SPEED],   s_bindVk[KR_SPEED],
         s_bindCfgStr[KR_SELECT],  s_bindVk[KR_SELECT],
         s_settingInventoryFaceCam ? 1 : 0);
     DebugLog(lbuf);
@@ -1077,14 +1074,6 @@ static void handleTogglePress()
     }
 }
 
-static void handleSpeedPress()
-{
-    if (s_lootUiSuspendActive)
-        return;
-    if (s_mode == MODE_FREE_MOVE)
-        s_xPressed = true;
-}
-
 static void handleSelectPress()
 {
     if (s_lootUiSuspendActive)
@@ -1123,7 +1112,6 @@ static void handleSneakPress()
 static void onPress(int role)
 {
     if (role == KR_TOGGLE)       handleTogglePress();
-    else if (role == KR_SPEED)   handleSpeedPress();
     else if (role == KR_SELECT)  handleSelectPress();
     else if (role == KR_FP)      handleFirstPersonPress();
     else if (role == KR_SNEAK)   handleSneakPress();
@@ -1137,11 +1125,10 @@ static PollKey s_keys[] =
 {
     { KR_FORWARD, false }, { KR_LEFT,   false },
     { KR_BACK,    false }, { KR_RIGHT,  false },
-    { KR_TOGGLE,  false }, { KR_SPEED,  false },
-    { KR_SELECT,  false }, { KR_FP,     false },
-    { KR_SNEAK,   false },
+    { KR_TOGGLE,  false }, { KR_SELECT, false },
+    { KR_FP,      false }, { KR_SNEAK,  false },
 };
-static const int NUM_KEYS = 9;
+static const int NUM_KEYS = 8;
 
 static bool isKenshiForeground()
 {
@@ -1160,14 +1147,13 @@ static DWORD WINAPI PollThread(LPVOID)
         if (!isKenshiForeground()) continue;
         // Movement roles are ALWAYS VK-polled (INI-configurable) — the
         // native keybind system is one-command-per-key and vanilla camera
-        // owns W/S/A/D, so DC movement cannot live there.  Toggle/speed
-        // polling stands down once their native commands are registered
+        // owns W/S/A/D, so DC movement cannot live there.  Toggle
+        // polling stands down once its native command is registered
         // (presses then arrive via the game's processKeys events).
         for (int i = 0; i < NUM_KEYS; ++i)
         {
             int role = s_keys[i].role;
-            if (s_nativeCommandsRegistered
-                && (role == KR_TOGGLE || role == KR_SPEED))
+            if (s_nativeCommandsRegistered && role == KR_TOGGLE)
                 continue;
             bool down = (GetAsyncKeyState(s_bindVk[role]) & 0x8000) != 0;
             if (down == s_keys[i].prev) continue;
@@ -1445,7 +1431,6 @@ static void clearAllState()
     s_enemyTargetingLogged = false;
     s_lastScanTick      = 0;
     s_fmTrackedMode     = MODE_VANILLA;
-    s_xPressed          = false;
     s_stabilizationCountdown = 0;
     s_lastCombatState   = COMBAT_FINISHED;
     s_wasPrevInCombat   = false;
@@ -4199,7 +4184,7 @@ static void combatGo_hook(CombatClass* thisptr, float frameTime)
 //   1.  Safety gate (load-guard)
 //   2.  Selection tracking
 //   3.  V-Mode transition
-//   4.  HUD + X speed key
+//   4.  HUD
 //   5.  Pre-AI WASD
 //   6.  s_mainLoopOrig (AI + CharMovement::update + CombatClass::go)
 //   7.  Post-AI combat job suppression
@@ -4569,7 +4554,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             s_aHeld               = false;
             s_sHeld               = false;
             s_dHeld               = false;
-            s_xPressed            = false;
             s_wasdWasActive       = false;
             s_wasdMovementApplied = false;
             s_prevWasdDir         = Ogre::Vector3::ZERO;
@@ -4876,7 +4860,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         registerNativeCommands(key);
 
     // Movement flags come from the poll thread (always — see the native
-    // keybind block comment).  Only the toggle/speed persistence watchdog
+    // keybind block comment).  Only the toggle persistence watchdog
     // runs here: it saves rebinds even if the options menu never calls
     // saveOptions, and logs whether rebinds actually reach Command::bound.
     if (s_nativeCommandsRegistered)
@@ -5105,8 +5089,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
     // on the SNEAK button takes), so the UI checkbox, the standing order, and
     // the character's stealth state all stay in sync (user 2026-08-01: direct
     // setStealthMode toggled sneak but left the SNEAK button visually off).
-    // Same precedent as the X speed key driving OrdersPanel::speedNext.  Falls
-    // back to the raw state switch if the panel isn't showing the anchor (no UI
+    // Falls back to the raw state switch if the panel isn't showing the anchor (no UI
     // to sync in that case).  Stealth skill, detection, and XP all run vanilla
     // (Rule 1: DC invokes the system, it does not reimplement it); WASD speed
     // while sneaking is capped to the real stealth speed in wasdMoveLimit.
@@ -5258,30 +5241,8 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
     }
     s_prof_cameraLock += qpcNow() - _clStart; }   // end camera-lock timer
 
-    // 4. HUD + X speed key.
+    // 4. HUD.
     hudUpdate();
-
-    if (s_xPressed && !s_lootUiSuspendActive)
-    {
-        s_xPressed = false;
-        if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && s_freeMoveAnchor->movement)
-        {
-            OrdersPanel* op = (gui && gui->mainbar) ? gui->mainbar->ordersDataPanel : nullptr;
-            if (op)
-            {
-                op->speedNext(nullptr);
-                MoveSpeed ns = MoveSpeed(int((unsigned char)op->speedImageNamesIdx));
-                if (ns < GROUPED)
-                {
-                    s_freeMoveAnchor->movement->setDesiredSpeedOrders(ns);
-                    s_freeMoveAnchor->movement->setDesiredSpeed(ns);
-                }
-                DebugLog(ns == WALK ? "[WASDCombat] speed_walk"
-                       : ns == JOG  ? "[WASDCombat] speed_jog"
-                                    : "[WASDCombat] speed_run");
-            }
-        }
-    }
 
     // 5. Pre-AI WASD application.
     if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && s_freeMoveAnchor->movement && !s_lootUiSuspendActive)
@@ -6958,10 +6919,10 @@ static bool s_processKeysHookOk = false;  // set at install; native registration
 // guards against any case where the command ends up unbound at save time.
 // The value is the raw bound int (OIS code | modifier masks), round-
 // tripped verbatim through InputHandler::bind.
-static const int DC_CMD_COUNT = 2;
+static const int DC_CMD_COUNT = 1;
 static const char* const DC_CMD_NAMES[DC_CMD_COUNT] =
 {
-    "dc_toggle", "dc_speed_cycle"
+    "dc_toggle"
 };
 
 // [NativeBinds] format version.  v1 (no "version=" key) WROTE Command::bound
@@ -7040,7 +7001,7 @@ static void saveNativeBindsToIni(const char* reason)
 // menu calling saveOptions (and its logs reveal whether a menu rebind even
 // updates Command::bound).  Runs from mainLoop every BIND_WATCH_INTERVAL_MS
 // once native bindings are registered; first pass only snapshots.
-static int       s_bindSnapshot[DC_CMD_COUNT] = { 0, 0 };
+static int       s_bindSnapshot[DC_CMD_COUNT] = { 0 };
 static bool      s_bindSnapshotValid    = false;
 static ULONGLONG s_bindWatchTick        = 0;
 static const ULONGLONG BIND_WATCH_INTERVAL_MS = 3000;
@@ -7134,9 +7095,9 @@ static void applyNativeBindsFromIni(InputHandler* self)
 // iniSavedNativeBind — the keycode a dc_ command was rebound to in the v2
 // [NativeBinds] INI, or -1 if the user never rebound it (no file, pre-v2
 // format, or value absent).  Mirrors applyNativeBindsFromIni's version gate
-// exactly.  Used at registration to decide whether to claim the V/X default
+// exactly.  Used at registration to decide whether to claim the V default
 // at all: if the user already moved the command (e.g. to Ctrl+V), registering
-// plain V/X would let Kenshi's one-command-per-key rule STEAL V/X from any
+// plain V would let Kenshi's one-command-per-key rule STEAL V from any
 // vanilla command (camera tilt, zoom-out) the player bound there, wiping it
 // every session (field report 2026-06-23).
 static int iniSavedNativeBind(const char* name)
@@ -7149,44 +7110,39 @@ static int iniSavedNativeBind(const char* name)
     return (v > 0) ? v : -1;
 }
 
-// registerNativeCommands — register dc_toggle / dc_speed_cycle and apply
+// registerNativeCommands — register dc_toggle and apply
 // INI-persisted bindings.  FIELD FINDING (2026-06-10 log): the game runs
 // InputHandler::loadConfig BEFORE RE_Kenshi loads plugins, so a loadConfig
 // hook alone never fires.  This is therefore called from the first
 // mainLoop pass (key global valid, main thread) — the loadConfig hook
 // remains only as a re-registration path if the game ever reloads its
-// keyboard config.  Toggle + speed ONLY: movement keys must never be
+// keyboard config.  Toggle ONLY: movement keys must never be
 // registered (one command per key; vanilla camera owns W/S/A/D).
 static void registerNativeCommands(InputHandler* self)
 {
     if (s_nativeCommandsRegistered || !self) return;
     if (!s_processKeysHookOk)
     {
-        // Without the event reader, toggle/speed presses would be lost —
+        // Without the event reader, toggle presses would be lost —
         // stay on the INI/poll fallback entirely.
         DebugLog("[WASDCombat] dc_native_keybinds_skipped_no_event_reader");
         return;
     }
-    // Claim the V/X default ONLY when the user has not rebound the command.
+    // Claim the V default ONLY when the user has not rebound the command.
     // If a saved rebind exists (e.g. Ctrl+V), register with NO physical key so
-    // loadConfig never steals plain V/X from a vanilla camera binding; the
+    // loadConfig never steals plain V from a vanilla camera binding; the
     // saved key is restored by applyNativeBindsFromIni immediately below.
     const int savedToggle = iniSavedNativeBind("dc_toggle");
-    const int savedSpeed  = iniSavedNativeBind("dc_speed_cycle");
     self->addCommand("dc_toggle",        0,
                      (savedToggle > 0) ? OIS::KC_UNASSIGNED : OIS::KC_V,
                      OIS::KC_UNASSIGNED, InputHandler::NONE_MASK, InputHandler::GLOBAL);
-    self->addCommand("dc_speed_cycle",   0,
-                     (savedSpeed  > 0) ? OIS::KC_UNASSIGNED : OIS::KC_X,
-                     OIS::KC_UNASSIGNED, InputHandler::NONE_MASK, InputHandler::GLOBAL);
     char rnbuf[160];
     sprintf_s(rnbuf, sizeof(rnbuf),
-        "[WASDCombat] dc_native_register defaults toggle=%s speed=%s",
-        (savedToggle > 0) ? "deferred(rebound)" : "V",
-        (savedSpeed  > 0) ? "deferred(rebound)" : "X");
+        "[WASDCombat] dc_native_register defaults toggle=%s",
+        (savedToggle > 0) ? "deferred(rebound)" : "V");
     DebugLog(rnbuf);
     applyNativeBindsFromIni(self);       // our INI is the real persistence
-    s_nativeCommandsRegistered = true;   // poll-thread toggle/speed stand down
+    s_nativeCommandsRegistered = true;   // poll-thread toggle stands down
     DebugLog("[WASDCombat] dc_native_keybinds_registered");
 }
 
@@ -7233,13 +7189,11 @@ static void optionsCreate_hook(OptionsWindow* self)
     {
         // No leading addSpace — it rendered as a large empty gap above the
         // section (field finding).  The "Direct Control:" prefixes are the
-        // section marker, KEP-style.  Toggle + speed only: movement keys
+        // section marker, KEP-style.  Toggle only: movement keys
         // are VK-polled (WASDCombatPlugin.ini) because the native system
         // is one-command-per-key and vanilla camera owns W/S/A/D.
         controlsTab->addCustomLine(new DataPanelLine_KeyConfig(
             "dc_toggle",        "Direct Control: Toggle",        0x19));
-        controlsTab->addCustomLine(new DataPanelLine_KeyConfig(
-            "dc_speed_cycle",   "Direct Control: Speed Cycle",   0x19));
         DebugLog("[WASDCombat] dc_controls_menu_section_added");
     }
     else
@@ -7248,7 +7202,7 @@ static void optionsCreate_hook(OptionsWindow* self)
     }
 }
 
-// GameWorld::processKeys — toggle/speed press events arrive in key->events
+// GameWorld::processKeys — toggle press events arrive in key->events
 // for exactly one processKeys cycle; consume them here on the main thread.
 // No pause gate: the V toggle has always worked while paused (poll-thread
 // behavior preserved).  Loading screens are skipped.
@@ -7263,8 +7217,7 @@ static void processKeys_hook(GameWorld* thisptr)
     for (auto it = key->events.begin(); it != key->events.end(); ++it)
     {
         const std::string& n = (*it)->name;
-        if (n == "dc_toggle")           handleTogglePress();
-        else if (n == "dc_speed_cycle") handleSpeedPress();
+        if (n == "dc_toggle") handleTogglePress();
     }
 }
 
