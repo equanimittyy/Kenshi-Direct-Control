@@ -8,7 +8,7 @@
 #include <kenshi/Tasker.h>
 #include <kenshi/CharMovement.h>
 #include <kenshi/CharStats.h>
-#include <kenshi/CombatClass.h>
+#include <kenshi/combat/CombatClass.h>
 #include <kenshi/CameraClass.h>
 #include <kenshi/Globals.h>
 #include <kenshi/OptionsHolder.h>

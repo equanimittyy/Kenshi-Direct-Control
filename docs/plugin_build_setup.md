@@ -30,48 +30,55 @@ RE_Kenshi loads the plugin into the game. Its installer also installs `KenshiLib
 
    The first line of the output must be `Microsoft (R) C/C++ Optimizing Compiler Version 16.00.40219.01 for x64`. `16.00` and `for x64` identify the 2010 x64 compiler, and `40219` shows that SP1 is installed. Visual Studio 2010 sets `VS100COMNTOOLS` to its own folder, so the commands work on any install drive. Close the prompt afterwards, because `vcvarsall.bat` changes its environment.
 
-4. Install [Git LFS](https://git-lfs.com/). The dependency repository in section 3 stores its libraries and its Boost archive in LFS.
+## 3. Fill deps/
 
-## 3. Get the dependencies
+`WASDCombatPlugin.vcxproj` reads KenshiLib and Boost from `deps\` at the repository root. Git ignores this folder. It holds exactly four folders: `Include\` and `Libraries\` from KenshiLib, and `boost\` and `lib64-msvc-10.0\` from Boost.
 
-`WASDCombatPlugin.vcxproj` reads KenshiLib, Ogre, MyGUI, and Boost 1.60 from a sibling folder, `..\KenshiLib_Examples_deps\`, next to this repository. The [KenshiLib_Examples_deps](https://github.com/BFrizzleFoShizzle/KenshiLib_Examples_deps) repository has exactly this layout.
+1. Choose the KenshiLib version that the installed RE_Kenshi ships. On the [KenshiLib releases page](https://github.com/BFrizzleFoShizzle/KenshiLib/releases), the notes of that release say so, for example "KenshiLib v0.5.0 - this is the version shipped in RE_Kenshi 0.3.5". The version must be v0.3.4 or later, because the source includes `<kenshi/combat/CombatClass.h>`, and earlier versions have that header at `kenshi/CombatClass.h`.
+2. Download two archives of that release:
 
-The source includes `<kenshi/CombatClass.h>`. KenshiLib v0.3.4 and later moved that header to `kenshi/combat/CombatClass.h`, so the current `master` of KenshiLib_Examples_deps does not build this plugin. Commit `e75769b` ("Fixed missing boost environment variable") is the last commit that has the header at the old path. It contains KenshiLib v0.3.0.
+   | Archive | What you take from it |
+   |---|---|
+   | `https://github.com/BFrizzleFoShizzle/KenshiLib/archive/refs/tags/v<version>.zip`, the "Source code (zip)" link of the release | The `Include\` and `Libraries\` folders |
+   | `KenshiLib_v<version>.zip`, a release asset | The `KenshiLib.lib` file |
 
-1. In the folder that contains this repository, clone the dependencies and check out that commit. Do not download a ZIP, because a ZIP has no LFS files.
+   The tag archive matches `KenshiLib.lib` of the same release. **Code > Download ZIP** on the repository page gives the default branch instead, which can be ahead of the release.
+
+3. From the source archive, copy the `Include\` and `Libraries\` folders into `deps\KenshiLib\`.
+4. From the release asset, copy `KenshiLib.lib` into `deps\KenshiLib\Libraries\`.
+5. Get Boost 1.60.0 built with the Visual C++ 2010 x64 compiler. boost.org offers only source archives, so use the prebuilt installer that the Boost project publishes on SourceForge:
+   1. Download [`boost_1_60_0-msvc-10.0-64.exe`](https://sourceforge.net/projects/boost/files/boost-binaries/1.60.0/boost_1_60_0-msvc-10.0-64.exe/download) and run it.
+   2. On the folder page of the installer, click **Browse** and select the `deps\` folder of the repository. The installer adds `boost_1_60_0\` to the selected folder itself, so the install folder becomes `deps\boost_1_60_0\`.
+   3. In `deps\boost_1_60_0\`, keep the `boost\` and `lib64-msvc-10.0\` folders, and delete the other files and folders that the installer added.
+
+6. Check that `deps\` matches this layout. `deps\KenshiLib\` and `deps\boost_1_60_0\` each contain their two folders and nothing else.
 
    ```
-   git clone https://github.com/BFrizzleFoShizzle/KenshiLib_Examples_deps.git
-   cd KenshiLib_Examples_deps
-   git checkout e75769b
-   git lfs pull
+   deps\
+     KenshiLib\
+       Include\                   the complete folder from the source archive
+       Libraries\                 the complete folder from the source archive, plus KenshiLib.lib
+         KenshiLib.lib
+         mygui\MyGUIEngine_x64.lib
+         ogre\OgreMain_x64.lib
+     boost_1_60_0\
+       boost\                     the Boost headers
+       lib64-msvc-10.0\           the built Boost libraries
    ```
 
-2. Run `Setup.bat` in `KenshiLib_Examples_deps\`. It extracts `boost_1_60_0\boost.zip` and sets user environment variables, among them `KENSHILIB_DIR`, which points to `KenshiLib_Examples_deps\KenshiLib`. It runs as administrator.
-3. Check that the folders match this layout:
-
-   ```
-   <parent folder>\
-     Kenshi-Direct-Control\           this repository
-     KenshiLib_Examples_deps\
-       KenshiLib\
-         Include\                     kenshi\CombatClass.h is directly in kenshi\
-         Libraries\
-           KenshiLib.lib
-           MyGUIEngine_x64.lib
-           OgreMain_x64.lib
-       boost_1_60_0\
-         boost\                       the Boost headers
-         stage\lib\                   the built Boost libraries
-   ```
-
-   Each `.lib` file must be larger than 1 KB. A file of about 130 bytes is an LFS pointer, which means that `git lfs pull` did not run.
-
-The project searches `$(KENSHILIB_DIR)` before the sibling folder. If `KENSHILIB_DIR` points to a different KenshiLib, the build mixes headers from two versions. Keep it on the checkout from step 1, or delete the variable.
+The Ogre and MyGUI libraries in KenshiLib match the game, so the build uses those.
 
 ## 4. Build the plugin
 
-1. In the repository root, run `build.cmd`. It finds MSBuild with `vswhere`, builds **Release | x64**, and stops with `Build failed.` if the build fails.
+1. In the repository root, run `package_release.cmd`, and select an option:
+
+   | Option | Result |
+   |---|---|
+   | **1. Rebuild and repackage** | Builds **Release \| x64**, then makes the release zip |
+   | **2. Rebuild only** | Builds **Release \| x64** |
+   | **3. Repackage** | Makes the release zip from the last build |
+
+   The script finds MSBuild with `vswhere`. Packaging runs `scripts\package_release.ps1` in Windows PowerShell, which every Windows version has.
 
    To build by hand instead, open the **Developer Command Prompt** of your Visual Studio version, go to the repository root, and run:
 
@@ -79,21 +86,24 @@ The project searches `$(KENSHILIB_DIR)` before the sibling folder. If `KENSHILIB
    msbuild WASDCombatPlugin.sln /p:Configuration=Release /p:Platform=x64
    ```
 
-2. Check that `dist\WASDCombatPlugin\` exists. After each build, the project puts the complete mod folder there: the DLL and the files in `mod\`. Git ignores `dist\`.
+2. Check that `dist\WASDCombatPlugin-<version>.zip` exists. The version comes from the `version=` line in `mod\mod.info`. Packaging stops if the DLL was not built with the Visual C++ 2010 toolset.
 
 | Path | Contents |
 |---|---|
-| `mod\` | The mod files that the build does not make: `RE_Kenshi.json`, which tells RE_Kenshi to load the DLL, `WASDCombatPlugin.mod`, an empty Kenshi data file that puts the mod in the launcher mod list, and `WASDCombatPlugin.ini` |
-| `dist\WASDCombatPlugin\` | The mod folder to install |
-| `dist\bin\` | The linker output, including the `.pdb` file for crash debugging |
+| `mod\` | The mod files that the build does not make: `RE_Kenshi.json`, which tells RE_Kenshi to load the DLL, `WASDCombatPlugin.mod`, an empty Kenshi data file that puts the mod in the launcher mod list, and `mod.info`, which holds the release version |
+| `dist\bin\Release\` | The linker output: the DLL, and the `.pdb` file for crash debugging |
 | `dist\obj\` | The intermediate files |
+| `dist\stage\WASDCombatPlugin\` | The mod folder that the zip contains |
+| `dist\WASDCombatPlugin-<version>.zip` | The release zip |
+
+Git ignores `dist\`. The zip does not contain `WASDCombatPlugin.ini`. The plugin writes a default INI when none exists, so a shipped INI would only reset the settings of each player who updates.
 
 `BuildStepCompat.targets` lets MSBuild build the `v100` project outside the Visual Studio IDE. The project imports it, so you do not need to do anything for it.
 
 ## 5. Install the build in Kenshi
 
 1. If you subscribe to the mod on the Steam Workshop, unsubscribe. Then only your build loads.
-2. Copy the `dist\WASDCombatPlugin\` folder into `Kenshi\mods\`, and replace the files that are there. The result is `Kenshi\mods\WASDCombatPlugin\WASDCombatPlugin.dll`.
+2. Extract `dist\WASDCombatPlugin-<version>.zip` into `Kenshi\mods\`, and replace the files that are there. The result is `Kenshi\mods\WASDCombatPlugin\WASDCombatPlugin.dll`.
 3. In the Kenshi launcher, open the mod list and enable **WASDCombatPlugin**.
 
 ## 6. Test in game
@@ -108,10 +118,9 @@ The project searches `$(KENSHILIB_DIR)` before the sibling folder. If `KENSHILIB
 |---|---|---|
 | `MSB4019: The imported project "...Microsoft.Cpp.Default.props" was not found` | The Visual Studio install has no C++ workload. | Section 2, step 1 |
 | `MSB8020: The build tools for v100 ... cannot be found` | The 2010 x64 compiler is missing. | Section 2, steps 2 and 3 |
-| `C1083: Cannot open include file: 'kenshi/CombatClass.h'` | The KenshiLib headers are v0.3.4 or later. | Section 3, step 1, and the `KENSHILIB_DIR` note |
-| `C1083: Cannot open include file` for another `kenshi/`, `ogre/`, `mygui/`, or `boost/` header | `KenshiLib_Examples_deps\` is missing or is not next to this repository, or Boost is not extracted. | Section 3 |
-| `LNK1104: cannot open file 'libboost_...-vc100-mt-1_60.lib'` | `Setup.bat` did not extract `stage\lib\`. | Section 3, step 2 |
-| `LNK1107: invalid or corrupt file` for a `.lib` file | The file is an LFS pointer. | Section 3, steps 1 and 3 |
+| `C1083: Cannot open include file: 'kenshi/combat/CombatClass.h'` | The KenshiLib headers are older than v0.3.4. | Section 3, step 1 |
+| `C1083: Cannot open include file` for another `kenshi/`, `ogre/`, `mygui/`, or `boost/` header, or for `Debug.h` | `deps\` is incomplete. | Section 3 |
+| `LNK1104: cannot open file 'KenshiLib.lib'` or `'libboost_...-vc100-mt-1_60.lib'` | A library is not where the project looks. | Section 3, steps 4 to 6 |
 | The main menu has no RE_Kenshi text | RE_Kenshi is not installed. | Section 1 |
 | `V` does nothing in game | RE_Kenshi did not load the plugin. | Section 5, then the RE_Kenshi debug log |
 | The game crashes when it loads the plugin | The DLL was built with a different compiler, or against a KenshiLib version that the game does not have. | Sections 2 and 3 |

@@ -169,7 +169,7 @@ One possible cause of jank is already visible in Direct Control. `PollThread` re
 
 ## Candidate KenshiLib API
 
-These come from our `deps/KenshiLib` headers. Direct Control builds against a different KenshiLib revision: it includes `<kenshi/CombatClass.h>`, but our copy has `kenshi/combat/CombatClass.h`. So check each signature against the revision that the fork uses.
+These come from our `deps/KenshiLib` headers, which are also the headers that the fork builds against. Upstream Direct Control builds against an older KenshiLib that has `kenshi/CombatClass.h` instead of `kenshi/combat/CombatClass.h`, so the fork changes that include.
 
 | Need | Method |
 |---|---|
@@ -205,7 +205,7 @@ Change game state only on the main thread, inside the `mainLoop` hook or another
 
 3. **Set up the repository.**
    - Fork `smokefoolius/Kenshi-Direct-Control` into your GitHub account. A fork keeps the history and the attribution.
-   - Build with VS2010 (`v100`), KenshiLib, and Boost 1.60, as `WASDCombatPlugin.vcxproj` expects. Find which KenshiLib revision gives `<kenshi/CombatClass.h>`.
+   - Build with VS2010 (`v100`) against `deps/`, as [plugin_build_setup.md](plugin_build_setup.md) describes.
    - Verify: the unchanged fork builds, loads in game, and behaves the same as the Workshop release of Direct Control.
 
 4. **Direct Combat activation.** This proves the build, the new source files, and the keybind setup before any combat change.
