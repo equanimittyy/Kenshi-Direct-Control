@@ -105,7 +105,7 @@ See the Nexus Mods changelog for the full history.
 
 ## Building from Source
 
-The plugin is a single C++ source file built as an x64 DLL against the RE_Kenshi plugin API.
+The plugin is one C++ translation unit (`src/WASDCombatPlugin.cpp` and the `src/*.inl` files it includes) built as an x64 DLL against the RE_Kenshi plugin API.
 
 1. Open `WASDCombatPlugin.sln` in Visual Studio (Desktop development with C++ workload).
 2. The project expects [KenshiLib](https://github.com/KenshiReclaimer/KenshiLib/) headers and libraries — either set the `KENSHILIB_DIR` environment variable, or place the [KenshiLib example dependencies](https://github.com/BFrizzleFoShizzle/KenshiLib_Examples_deps) (KenshiLib, Ogre, MyGUI, Boost 1.60) in a sibling `KenshiLib_Examples_deps` folder as referenced by the `.vcxproj`.

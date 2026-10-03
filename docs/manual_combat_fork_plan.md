@@ -114,7 +114,7 @@ Each change below applies only while Direct Combat is on. While it is off, the u
 
 ## Code layout
 
-Keep `WASDCombatPlugin.cpp` as upstream has it. Put Direct Combat in its own source files. In the Direct Control hooks, add only short calls into Direct Combat, each behind the Direct Combat on/off flag. This keeps each merge of a future Direct Control update small.
+Put Direct Combat in its own `src/*.inl` files, included by `src/WASDCombatPlugin.cpp` like the other modules. In the Direct Control hooks, add only short calls into Direct Combat, each behind the Direct Combat on/off flag. This keeps Direct Combat separate from the Direct Control code.
 
 ## Rules for each source
 

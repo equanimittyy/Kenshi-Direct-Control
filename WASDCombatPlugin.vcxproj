@@ -97,6 +97,22 @@
   <ItemGroup>
     <ClCompile Include="src\WASDCombatPlugin.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\config.inl" />
+    <ClInclude Include="src\state.inl" />
+    <ClInclude Include="src\camera_state.inl" />
+    <ClInclude Include="src\ini_config.inl" />
+    <ClInclude Include="src\input.inl" />
+    <ClInclude Include="src\session_state.inl" />
+    <ClInclude Include="src\movement.inl" />
+    <ClInclude Include="src\mouse_input.inl" />
+    <ClInclude Include="src\camera.inl" />
+    <ClInclude Include="src\camera_hooks.inl" />
+    <ClInclude Include="src\movement_hooks.inl" />
+    <ClInclude Include="src\main_loop.inl" />
+    <ClInclude Include="src\game_hooks.inl" />
+    <ClInclude Include="src\native_keybinds.inl" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
