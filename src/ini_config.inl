@@ -1,7 +1,4 @@
-// Kenshi's InputHandler allows one command per physical key, and vanilla camera panning owns
-// W/A/S/D. Registering DC movement commands there stole the keys from the camera and persisted
-// the theft into controls.cfg, so movement keys are always VK-polled and dc_move_* commands must
-// never be registered. Only the toggle sits on a free key and is registered natively.
+// One command per key and the vanilla camera owns W/A/S/D, so movement keys are VK-polled.
 static volatile bool s_nativeCommandsRegistered = false;
 static void watchNativeBindChanges();
 static void registerNativeCommands(InputHandler* self);
@@ -113,8 +110,6 @@ static void writeDefaultConfig(const char* path)
     HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, nullptr,
                            CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return;
-    // The template ships player-facing settings only; the loader also reads many
-    // advanced [FirstPerson] keys, each with a safe default.
     static const char tmpl[] =
         "[Keybinds]\r\n"
         "; Valid names: letters, digits, F1..F24, SPACE, TAB, SHIFT, CONTROL,\r\n"
@@ -154,8 +149,7 @@ static void writeDefaultConfig(const char* path)
     CloseHandle(h);
 }
 
-// Separate from loadKeybinds so enterFirstPerson can re-read it: INI edits apply on the
-// next first-person toggle without a relaunch.
+// Separate so enterFirstPerson can re-read INI edits without a relaunch.
 static void loadFirstPersonConfig(const char* path)
 {
     char fb[32];

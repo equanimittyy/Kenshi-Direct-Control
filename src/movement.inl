@@ -27,8 +27,6 @@ static bool computeWASDDirection(bool bW, bool bA, bool bS, bool bD, Ogre::Vecto
     return true;
 }
 
-// With WasdSpeedCap on, the limit is CharStats::getMaxRunSpeed times WasdSpeedMult, clamped
-// further while chained or sneaking. Off restores the old uncapped ~99.
 static float wasdMoveLimit(bool turning)
 {
     const float turnBoost = turning ? g_loco.wasdTurnResponsiveness : 1.0f;
@@ -108,8 +106,7 @@ static bool isProtectedAnimationState(Character* ch)
     return false;
 }
 
-// Used only at instant_stop and combat_state_restored_after_wasd_release; it is too broad
-// for the movement injection sites.
+// Too broad for the movement injection sites; used only at instant stop and the post-release restore.
 static bool isCommittedAction(Character* ch)
 {
     ScopeTimer _tCA(s_prof_committedAct);
@@ -131,9 +128,7 @@ static bool isCommittedAction(Character* ch)
         { _LOG_COMMITTED("HEALING_JOB");        return true; }
 
     CombatClass* cc = ch->getCombatClass();
-    // Combat states are gated on combatModeActive: a state left stale after a fight (DECISION
-    // or STUMBLE after a knockdown) otherwise blocks the release-stop and delays WASD after
-    // getting up. The physical states above stay ungated.
+    // Gated on combatModeActive: a stale post-knockdown state would block the release-stop.
     if (cc && cc->combatModeActive)
     {
         swordStateEnum st = cc->getCombatState();
@@ -158,11 +153,7 @@ static bool isCommittedAction(Character* ch)
     return false;
 }
 
-// A one-shot combat clip that must finish before WASD takes over: Kenshi cannot abort a clip,
-// so cutting one with movement stutters. While true, charMovUpdate holds movement and
-// combatGo_hook lets go() run, so exactly one system drives the body. DECISION, BLOCK, CIRCLE,
-// WAIT and HESITATE persist or re-trigger attacks, so they are excluded to let the player
-// retreat. Gated on combatModeActive because stale post-combat states must not count.
+// Kenshi cannot abort a clip, so movement waits; looping states are excluded so the player can retreat.
 static bool isCommittedCombatClip(Character* ch)
 {
     if (!ch) return false;
@@ -173,11 +164,7 @@ static bool isCommittedCombatClip(Character* ch)
         || st == STUMBLE       || st == REACTION_BLOCK;
 }
 
-// A character using furniture (chair, bed, machine) is locked to its node, so
-// setDirectMovement only rotates the model; charMovUpdate issues a real move order instead.
-// A job-driven seat shows PRETEND_TO_OPERATE_MACHINERY, not OPERATE_MACHINERY, and both must
-// match or a job-seated character rotates in place after a squad switch. The SIT, BED and REST
-// goals never surface as the current action and are kept as a harmless fallback.
+// Seated characters ignore setDirectMovement; job seats report PRETEND_TO_OPERATE_MACHINERY.
 static bool isSeatedTaskType(TaskType t)
 {
     return t == OPERATE_MACHINERY
@@ -208,7 +195,6 @@ static bool isUsingStationaryTurret(Character* ch)
     return (bool)(ch->isUsingTurret);
 }
 
-// Each enemy is processed once per WASD hold. WASD release clears the cache.
 static bool retreatSessionCacheContains(Character* ch)
 {
     for (int i = 0; i < s_retreatSessionCacheCount; ++i)
@@ -230,8 +216,7 @@ static bool isDownedButMovable(Character* ch)
 {
     if (!ch) return false;
     ProneState prone = ch->getProneState();
-    // isUnconcious() is also true for playing-dead and crippled characters, which can
-    // still crawl, so only PS_KO is a hard block.
+    // isUnconcious() is also true for playing-dead and crippled characters, who can still crawl.
     if (prone == PS_KO) return false;
     if (ch->isCurrentlyGettingUp) return false;
     if (prone == PS_PLAYING_DEAD || prone == PS_CRIPPLED) return true;
@@ -239,9 +224,7 @@ static bool isDownedButMovable(Character* ch)
     return false;
 }
 
-// Debounces isInsideBuildingLoadedInterior for 400 ms. On stairwell and roof
-// transitions the raw flag flickers between floor layers, and the crawl then flaps
-// between order mode and direct mode, each mode cancelling the other.
+// The raw indoor flag flickers on stairs and roofs, flipping the crawl between order and direct mode.
 static bool      s_indoorEffective  = false;
 static bool      s_indoorPendingVal = false;
 static ULONGLONG s_indoorPendingMs  = 0;
@@ -271,11 +254,7 @@ static bool stableIndoors(CharMovement* mv)
     return s_indoorEffective;
 }
 
-// Always false: downed movement is direct-injected everywhere, like standing WASD.
-// Order-driven movement failed: indoors, the interior router path-walks any order
-// regardless of the destination; outdoors, a blind 10 m destination on a roof or
-// elevated ground lands off the structure and the path routes back down. The order
-// machinery stays dormant so it can be restored.
+// Order-driven crawl misroutes indoors and off roofs, so that machinery stays dormant.
 static bool downedOrderDriven(Character* ch)
 {
     (void)ch;
@@ -283,8 +262,7 @@ static bool downedOrderDriven(Character* ch)
     return false;
 }
 
-// Uses playerMoveOrderDefault (the pathfind/crawl path) because setDirectMovement
-// is valid only for standing locomotion.
+// setDirectMovement is valid only for standing locomotion, so the crawl uses the pathfind order.
 static Ogre::Vector3 s_downedLastDir     = Ogre::Vector3::ZERO;
 static Ogre::Vector3 s_downedLastDest    = Ogre::Vector3::ZERO;
 static ULONGLONG     s_downedLastIssueMs = 0;
@@ -298,7 +276,7 @@ static void applyDownedMovement(bool bW, bool bA, bool bS, bool bD)
     if (!computeWASDDirection(bW, bA, bS, bD, dir)) return;
     float dlen = dir.length();
     if (dlen < 0.001f) return;
-    dir /= dlen;   // the pathfind destination needs the direction only
+    dir /= dlen;
 
     Ogre::Vector3 posNow = s_freeMoveAnchor->movement->pos;
     ULONGLONG    nowDI   = GetTickCount64();
@@ -323,10 +301,7 @@ static void applyDownedMovement(bool bW, bool bA, bool bS, bool bD)
     const float hopLen     = 100.0f;   // the point-click range, 10 m
     const float approachAt = 60.0f;
 
-    // Keep ONE persistent order, like a point-click: re-issuing every frame restarts
-    // pathfinding before it produces motion. This works only because the press-edge
-    // disengage and the post-AI standing injection are gated off for downed characters;
-    // otherwise they cancel the order after a few steps.
+    // One persistent order: re-issuing every frame restarts pathfinding before any motion.
     if (s_wasdDownedMovementActive
         && dir.dotProduct(s_downedLastDir) > 0.95f
         && nowDI - s_downedLastIssueMs < 1500
@@ -335,8 +310,7 @@ static void applyDownedMovement(bool bW, bool bA, bool bS, bool bD)
     s_downedLastDir     = dir;
     s_downedLastIssueMs = nowDI;
 
-    // A far destination (50 m) lies off the local navmesh, so the first leg of the
-    // path can head in the wrong direction. Short hops behave like nearby point-clicks.
+    // Short hops: a far destination is off the local navmesh and the path can start the wrong way.
     Ogre::Vector3 dest = posNow + dir * hopLen;
     s_downedLastDest = dest;
     s_freeMoveAnchor->playerMoveOrderDefault(nullptr, nullptr, dest);

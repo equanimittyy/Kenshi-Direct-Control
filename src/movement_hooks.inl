@@ -27,11 +27,7 @@ static bool isDoorInteractionTask(TaskType t)
     }
 }
 
-// The single hold authority, shared by the motion gate and the end-of-mainLoop
-// position clamp. Returns true when vanilla may move the anchor. The exemptions
-// yield the hold to systems that must move or animate the character. It uses
-// isProtectedAnimationState, not isCommittedAction, because the door Tasker owns
-// STARTUP_STATE and would never release the hold.
+// Uses isProtectedAnimationState: the door Tasker owns STARTUP_STATE and would never release the hold.
 static bool computeHoldDecision(Character* ch, const char** outReason)
 {
     if (!ch)                           { *outReason = "no_character";   return true; }
@@ -49,22 +45,16 @@ static bool computeHoldDecision(Character* ch, const char** outReason)
     return false;
 }
 
-// A move order inside a building can trip the vanilla "I can't get out of here"
-// bark, because the path to any destination may run through a locked door.
+// Indoors any path may cross a locked door and trip the "I can't get out of here" bark.
 static bool moveOrderMayBark(Character* ch)
 {
     if (!ch) return false;
     CharMovement* mv = ch->movement;
-    // All of these signals are false outdoors, so the outdoor click-cancel is unchanged.
-    // isInsideBuildingLoadedInterior() is false unless the interior is loaded, so
-    // isIndoors() is also needed. isPrisonerFreeToGo() is not used: its value for a
-    // free non-prisoner is unverified, and it could skip the disengage everywhere.
+    // isInsideBuildingLoadedInterior() is false until the interior loads, so isIndoors() is also needed.
     return mv && (mv->isInsideBuildingLoadedInterior() || mv->isIndoors());
 }
 
-// Cancels any in-flight path order by moving to the current position. Skipped
-// where the order could bark; halt(), the zeroed motion and the next-frame
-// hold-clamp park the character without it.
+// Skipped where the order could bark; halt() and the hold-clamp park the character anyway.
 static void dcSnapCancelOrder(Character* ch)
 {
     if (ch && ch->movement && !moveOrderMayBark(ch))
@@ -84,18 +74,14 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
     }
 
     ScopeTimer _tCM(s_prof_charMove);
-    // Cache the real speed tier every frame: a travel or save load frees the character
-    // before the load path can read it, and the old RUN fallback forced a sprint after
-    // every load.
+    // Cached every frame: a load frees the character before the load path can read its speed.
     if (thisptr->speedOrders < GROUPED)
         s_dcPreservedSpeedMode = thisptr->speedOrders;
     bool wasdHeld    = s_frameWasdHeld;
     bool inVMode     = (s_frameMode == MODE_FREE_MOVE);
     bool lootSuspend = s_frameLootSuspend;
 
-    // Combat key-roll bridge: a short gap between keys keeps driving in the last
-    // direction, so the AI does not square up mid-roll. The bridge does not refresh
-    // s_wasdLastHeldMs, so it expires on its own.
+    // The bridge does not refresh s_wasdLastHeldMs, so it expires on its own.
     bool combatBridge = false;
     if (!wasdHeld && inVMode && !lootSuspend && s_wasdMovementApplied
         && s_prevWasdDir.squaredLength() > 0.0001f)
@@ -130,8 +116,7 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
                         thisptr->currentMotion = Ogre::Vector3::ZERO;
                     s_wasdMovementApplied = false;
                     s_prevWasdDir         = Ogre::Vector3::ZERO;
-                    // Indoors, playerMoveOrderDefault path-walks the interior network even to the
-                    // current position, which gives a one-frame step before the hold-clamp engages.
+                    // Indoors this order path-walks even to the current position, a one-frame step before the clamp.
                     if (s_freeMoveAnchor && !moveOrderMayBark(s_freeMoveAnchor))
                     {
                         s_freeMoveAnchor->playerMoveOrderDefault(nullptr, nullptr, thisptr->pos);
@@ -149,8 +134,7 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
                 }
             }
 
-            // Position is clamped after orig as well, because indoor routing writes the
-            // position late in the frame.
+            // Also clamped after orig: indoor routing writes the position late in the frame.
             const char* holdReason = "";
             if (!computeHoldDecision(chR, &holdReason))
             {
@@ -201,8 +185,7 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
         s_charMovUpdateOrig(thisptr, time);
         return;
     }
-    // An order-driven downed crawl must not get halt() + setDirectMovement, which would
-    // cancel the order.
+    // halt() + setDirectMovement would cancel an order-driven crawl.
     {
         Character* chC = thisptr->getCharacter();
         if (chC && downedOrderDriven(chC))
@@ -214,9 +197,7 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
                 DebugLog("[WASDCombat] dc_crippled_can_move=true");
                 DebugLog("[WASDCombat] dc_crippled_using_downed_movement_path"); }
 
-            // Lingering combat mode computes its own movement inside update and fights the
-            // crawl order. Clear the flag for the integration step only; CombatClass::go
-            // still sees it in the AI phase.
+            // Lingering combat mode fights the crawl order; CombatClass::go still sees the flag in the AI phase.
             CombatClass* ccD = chC->getCombatClass();
             bool flippedD = false;
             if (ccD && ccD->combatModeActive)
@@ -239,11 +220,10 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
             return;
         }
     }
-    // Only a real key press refreshes the timestamp; otherwise one tap would drive
-    // forever in combat.
+    // Only a real key press refreshes this; otherwise one tap drives forever in combat.
     if (!combatBridge)
         s_wasdLastHeldMs = GetTickCount64();
-    s_holdPosValid   = false;  // recaptured on the next hold
+    s_holdPosValid   = false;
 
     Ogre::Vector3 wasdDir;
     bool dirOk = computeWASDDirection(s_wHeld, s_aHeld, s_sHeld, s_dHeld, wasdDir);
@@ -253,18 +233,14 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
         dirOk   = true;
     }
 
-    // Seated, sleeping or working characters are locked to the furniture node, so
-    // setDirectMovement only spins the model. A point-click move order gets them up
-    // with the proper animation and replaces the queued use job, so the AI does not
-    // pull them back onto the furniture.
+    // A move order replaces the queued use job, so the AI does not pull them back onto the furniture.
     if (dirOk)
     {
         Character* chSeat = thisptr->getCharacter();
         if (chSeat && (isAnchoredToFurniture(chSeat) || chSeat->isCurrentlyGettingUp))
         {
             chSeat->playerWantsMeToGetUp = true;
-            // Throttled re-issue, not a once-per-sit latch: a latch stuck across squad
-            // switches and job re-sits, so the character could no longer leave the chair.
+            // Throttled re-issue: a once-per-sit latch stuck across squad switches and re-sits.
             static ULONGLONG s_lastFurnitureExitMs = 0;
             ULONGLONG nowF = GetTickCount64();
             if (isAnchoredToFurniture(chSeat) && (nowF - s_lastFurnitureExitMs) > 600)
@@ -285,11 +261,7 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
         }
     }
 
-    // Kenshi cannot abort an animation clip, so cutting one with movement stutters.
-    // Buffer movement while a committed combat clip (swing, stagger, parry) finishes
-    // in place; combatGo_hook then suppresses go(), so no new attack chains. No combat
-    // state is touched here, so only one system drives the body. Other combat states
-    // still yield to movement so the player can always retreat.
+    // Kenshi cannot abort a clip, so movement is buffered until a committed combat clip finishes.
     if (dirOk && isCommittedCombatClip(thisptr->getCharacter()))
     {
         s_wasdMovementApplied = false;
@@ -318,11 +290,7 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
         thisptr->setDesiredSpeed(thisptr->speedOrders);
         thisptr->setDirectMovement(wasdDir, limit);
 
-        // Pre-charge currentMotion. At low FPS the engine often fails to integrate past the
-        // pre-charge, so a fractional boost makes an injured character (desiredSpeed about
-        // 55) lurch between full speed and a crawl. The floor is the full desired speed,
-        // clamped to the WASD move-limit: this velocity write, not setDirectMovement, is
-        // what binds the speed cap.
+        // This velocity write, not setDirectMovement, binds the speed cap; a fractional boost lurched at low FPS.
         float accel = (g_loco.wasdAccelerationMultiplier - 1.0f)
                     * (turning ? g_loco.wasdTurnResponsiveness : 1.0f);
         if (accel > 0.0f)
@@ -338,10 +306,7 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
 
         s_prevWasdDir = wasdDir;
 
-        // WASD always uses plain walk/run locomotion. Restoring combatModeActive after the
-        // integration step kept the combat animation layer on, so the body stayed in the
-        // arms-down pose. Leave it cleared while driving: go() is already suppressed, so
-        // no combat XP is lost, and the AI re-engages on release.
+        // combatModeActive stays cleared while driving: restoring it left the body in the arms-down pose.
         Character*   chFlip = thisptr->getCharacter();
         CombatClass* ccFlip = chFlip ? chFlip->getCombatClass() : nullptr;
         if (ccFlip && ccFlip->combatModeActive)
@@ -355,16 +320,13 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
             DebugLog("[WASDCombat] combat_locomotion_attempt_detected");
 #endif
 
-        // The combat AI re-enables animationOverride and changes movementMode when it wants
-        // to drive the body, so re-assert MOVE_DIRECTION after orig.
+        // The combat AI re-enables animationOverride, so MOVE_DIRECTION is re-asserted after orig.
         {
             Character*   chPost = thisptr->getCharacter();
             CombatClass* ccPost = chPost ? chPost->getCombatClass() : nullptr;
             if (ccPost)
             {
-                // Do not cut the combat state here: writing COMBAT_FINISHED every frame fought the
-                // combat system and stuttered. Committed clips are buffered above, and
-                // combatModeActive is cleared, so nothing slides.
+                // Do not write COMBAT_FINISHED here: doing it every frame fought the combat system and stuttered.
                 {
                     thisptr->animationOverride = false;
                     thisptr->movementMode      = MOVE_DIRECTION;
@@ -383,8 +345,7 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
     }
     else
     {
-        // Race: the snapshot said WASD was held, but the poll thread released the keys
-        // before the direction was computed.
+        // Race: the poll thread released the keys after the WASD snapshot.
         if (s_wasdMovementApplied)
         {
             Character* chRace = thisptr->getCharacter();
@@ -403,10 +364,7 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
     }
 }
 
-// Exclusive ownership of the anchor's locomotion, handed off at the press/release
-// edge, never fought per frame (the per-frame tug-of-war caused the combat
-// stutter). While WASD is held, plus the key-roll bridge, go() is skipped so the AI
-// never steers. On release go() runs fully autonomously.
+// Ownership is handed off at the press/release edge; a per-frame tug-of-war caused combat stutter.
 static void (*s_combatGoOrig)(CombatClass* thisptr, float frameTime);
 static void combatGo_hook(CombatClass* thisptr, float frameTime)
 {
@@ -418,9 +376,7 @@ static void combatGo_hook(CombatClass* thisptr, float frameTime)
         bool movementOwns = wasdHeld
             || (s_wasdLastHeldMs > 0
                 && (GetTickCount64() - s_wasdLastHeldMs) < COMBAT_WASD_BRIDGE_MS);
-        // Let go() run while a committed clip plays so the clip finishes and the state
-        // advances; suppressing it mid-clip would freeze the state machine and the movement
-        // buffer would stick forever.
+        // Suppressing go() mid-clip freezes the state machine, so the movement buffer would stick forever.
         if (movementOwns && !isCommittedCombatClip(thisptr->me))
         {
             s_retreatLockGoSuppressed = true;

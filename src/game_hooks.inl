@@ -1,9 +1,4 @@
-// Not installed: the hard-coded RVA is stale for the current RE_Kenshi exe and
-// lands mid-instruction in an unrelated helper (see startPlugin).  Loot/trade
-// detection runs on the mainLoop GUI poll instead.  Re-derive the RVA and
-// install through verifyPatchSiteBytes before enabling.
-// s_lootUiWasPrevOpen must NOT be set here: the window is not open yet, so the
-// close-side detection in mainLoop would fire at once.
+// Not installed (stale RVA). Never set s_lootUiWasPrevOpen here: the window is not open yet.
 static void (*s_showTradeWindowOrig)(ForgottenGUI*, const hand&, const hand&, TradeWindowType);
 
 static void showTradeWindow_hook(ForgottenGUI* thisptr, const hand& a, const hand& b, TradeWindowType type)
@@ -13,11 +8,8 @@ static void showTradeWindow_hook(ForgottenGUI* thisptr, const hand& a, const han
             s_hookBlockLoggedTrade = true;
             DebugLog("[WASDCombat] dc_hooks_blocked_during_loadgame hook=showTradeWindow"); }
         s_showTradeWindowOrig(thisptr, a, b, type); return; }
-    // Latched so the inventory face-cam never treats a foreign window as own
-    // inventory; the hand fields can be stale, so they are not used for this.
     if (!s_dcShutdownInProgress)
         s_tradeWindowActive = true;
-    // Move-through mode (InventoryFaceCam=false) keeps DC live during loot/trade.
     if (!s_loadGuardActive && s_mode == MODE_FREE_MOVE && s_settingInventoryFaceCam)
     {
         if (!s_lootUiSuspendActive)
@@ -76,8 +68,7 @@ static void playerControl_hook(PlayerInterface* thisptr, InputHandler& k)
         }
         else
         {
-            // Keyboard camera pan would detach the camera lock, and during a WASD
-            // hold it would also override the AI facing.
+            // Keyboard pan would detach the camera lock and override AI facing during a WASD hold.
             k.up    = false;
             k.down  = false;
             k.left  = false;
@@ -94,9 +85,7 @@ static void playerControl_hook(PlayerInterface* thisptr, InputHandler& k)
     s_playerControlOrig(thisptr, k);
 
     if (s_mode == MODE_FREE_MOVE
-        && !s_fpActive && !s_firstPersonActive   // OTS/FP own a detached camera node;
-                                     // re-tracking here fights it and breaks
-                                     // it after a reload.
+        && !s_fpActive && !s_firstPersonActive   // re-tracking fights the detached node
         && !s_lootUiSuspendActive
         && !s_cameraLockTurretSuspend
         && !s_dcPtrLossActive
@@ -184,11 +173,7 @@ static void removeJob_hook(Character* thisptr, TaskType t)
     s_removeJobOrig(thisptr, t);
 }
 
-// Not installed: the hard-coded RVA 0x7F95F0 is stale for the current RE_Kenshi
-// exe, and patching it crashed pathfinding (see startPlugin).  Re-derive the RVA
-// and install through verifyPatchSiteBytes before enabling.
-// The hold is released BEFORE the dispatcher runs so the click's own door
-// routing is never suppressed by the hold.
+// Not installed (stale RVA). The hold is released before dispatch so door routing still works.
 static void (*s_playerMoveOrig)(PlayerInterface* thisptr, const Ogre::Vector3& pos,
                                 Building* destBuilding);
 
@@ -201,8 +186,7 @@ static void playerMove_hook(PlayerInterface* thisptr, const Ogre::Vector3& pos,
             DebugLog("[WASDCombat] dc_hooks_blocked_during_loadgame hook=playerMove"); }
         s_playerMoveOrig(thisptr, pos, destBuilding); return; }
 
-    // In OTS/FP, WASD is the movement scheme, so ground point-click moves are
-    // swallowed.  Menu-issued orders use addOrder, a different path, and still work.
+    // Menu-issued orders use addOrder, so only ground clicks are swallowed here.
     if (s_fpActive || s_firstPersonActive)
     {
         static ULONGLONG s_otsClickSupLogTick = 0;
@@ -250,9 +234,7 @@ static void playerMove_hook(PlayerInterface* thisptr, const Ogre::Vector3& pos,
     s_playerMoveOrig(thisptr, pos, destBuilding);
 }
 
-// The player-order channel is separate from the job queue, so door suppression
-// needs this hook as well as addJob_hook.  MOVE_CUS_ORDERED must pass, because
-// DC's own disengage orders use it.
+// Player orders bypass the job queue; MOVE_CUS_ORDERED must pass for DC's disengage orders.
 static void (*s_addOrderOrig)(Character* thisptr, Building* dest, TaskType t,
                               RootObject* subject, bool shift, bool clear,
                               const Ogre::Vector3& location);
@@ -261,10 +243,7 @@ static void addOrder_hook(Character* thisptr, Building* dest, TaskType t,
                           RootObject* subject, bool shift, bool clear,
                           const Ogre::Vector3& location)
 {
-    // subject==nullptr means a move (to a position or to a building/door).  The
-    // gate must not depend on s_fpActive alone: moves with a non-null dest leaked
-    // through when the face-cam was off.  It applies to any player character,
-    // because the face-cam can lock onto the selected character, not the anchor.
+    // Not gated on s_fpActive alone: moves with a non-null dest leaked with the face-cam off.
     if (!s_dcShutdownInProgress && !s_loadGuardActive
         && s_mode == MODE_FREE_MOVE && thisptr && thisptr->isPlayerCharacter()
         && (subject == nullptr || s_fpActive)
@@ -279,8 +258,6 @@ static void addOrder_hook(Character* thisptr, Building* dest, TaskType t,
         return;
     }
 
-    // Diagnostic: the clear flag may tell a fresh player click apart from a stale
-    // automatic re-issue, which decides whether addOrder can safely clear the hold.
     if (!s_dcShutdownInProgress && !s_loadGuardActive
         && s_mode == MODE_FREE_MOVE && thisptr == s_freeMoveAnchor
         && s_wasdHoldActive)
@@ -330,9 +307,7 @@ static void addJob_hook(Character* thisptr, TaskType t, RootObject* subject,
             DebugLog("[WASDCombat] dc_hooks_blocked_during_loadgame hook=addJob"); }
         s_addJobOrig(thisptr, t, subject, shift, addDontClear, location); return; }
 
-    // Ground-click moves during inventory reach the anchor here, not through
-    // playerMove.  gui->isAnyInventoryWindowOpen is used because
-    // s_lootUiSuspendActive can lag one frame.
+    // isAnyInventoryWindowOpen, because s_lootUiSuspendActive can lag one frame.
     if (!s_loadGuardActive && s_mode == MODE_FREE_MOVE
         && thisptr && thisptr->isPlayerCharacter()
         && (subject == nullptr || s_fpActive)   // the own-inventory face-cam blocks all jobs
@@ -349,8 +324,7 @@ static void addJob_hook(Character* thisptr, TaskType t, RootObject* subject,
 
     if (!s_loadGuardActive && s_mode == MODE_FREE_MOVE && thisptr == s_freeMoveAnchor)
     {
-        // Only during the post-WASD hold: there is no player intent then, and
-        // stale indoor door tasks would otherwise fire on their own.
+        // Hold only: stale indoor door tasks would otherwise fire on their own.
         if (s_wasdHoldActive && !s_playerPointClickActive
             && !s_lootUiSuspendActive && !s_cameraLockTurretSuspend
             && !s_menuSuspendActive

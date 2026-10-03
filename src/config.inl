@@ -61,7 +61,7 @@ static const LogConfig g_log = {
     /* debugVerbose              */ false,
 };
 
-// Profiling accumulators hold raw QPC ticks; dc_perf converts them to ms once per second.
+// Raw QPC ticks; dc_perf converts them to ms once per second.
 static bool     s_profInited          = false;
 static LONGLONG s_profFreq            = 1;
 static LONGLONG s_prof_mainLoop       = 0;
@@ -75,7 +75,7 @@ static LONGLONG s_prof_combatTarget   = 0;
 static ULONGLONG s_prof_windowStart   = 0;
 static int      s_nearbyEnemyCount    = 0;
 static int      s_chaseFlapsCount     = 0;    // combat enter/exit transitions per perf window
-static int      s_pathfindingEnemyCount = 0;  // enemies in TARGET_PATHFINDING*, a path-recalculation proxy
+static int      s_pathfindingEnemyCount = 0;  // a path-recalculation proxy
 
 static inline LONGLONG qpcNow()
 {

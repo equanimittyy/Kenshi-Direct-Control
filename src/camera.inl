@@ -52,9 +52,7 @@ static void exitOTS(bool restoreCamera)
     DebugLog("[WASDCombat] dc_cam_exited");
 }
 
-// The attached RTS camera can only look top-down, so the inventory face-cam detaches
-// the camera onto its own root node. The face-cam runs only while the game is paused
-// and the character stands.
+// The attached RTS camera can only look top-down, so the face-cam detaches onto its own node.
 static void enterOTS()
 {
     if (s_fpActive) return;
@@ -64,7 +62,7 @@ static void enterOTS()
     Ogre::Camera* oc = cam->camera;
     if (!oc) return;
 
-    s_otsSavedAltitude = cam->altitude;   // held constant during the face-cam
+    s_otsSavedAltitude = cam->altitude;
     cam->stopFollowing();
     s_fpHadAutoTrack = (oc->getAutoTrackTarget() != nullptr);
     oc->setAutoTracking(false);
@@ -91,8 +89,7 @@ static void enterOTS()
     DebugLog("[WASDCombat] dc_cam_entered");
 }
 
-// True for a plain inventory and for a backpack character (2 windows), false for any
-// trade or loot session. Both inputs are live, never cached; see s_tradeWindowActive.
+// Both inputs are read live, never cached; see s_tradeWindowActive.
 static bool isOwnInventoryOpen()
 {
     return gui && !s_tradeWindowActive
@@ -110,11 +107,7 @@ static bool invMoveThroughEligible()
         && !gui->isCharacterEditorMode();
 }
 
-// First person shares the detached-camera machinery (s_fpNode, saved camera
-// locals) with the inventory face-cam; s_firstPersonActive selects the drive mode.
-
-// The head bone is manually controlled so that animation cannot rescale it; the neck
-// and body keep animating.
+// Manual control stops animation rescaling the head bone; the neck keeps animating.
 static void fpSetHeadBoneHidden(bool hide)
 {
     if (hide == s_fpHeadBoneHidden) return;
@@ -144,8 +137,7 @@ static void fpSetHeadBoneHidden(bool hide)
     }
 }
 
-// The skeleton MUST come from AppearanceBase::getSkeleton(): Entity::getSkeleton()
-// on the body entity returns a different runtime type whose virtual calls crash.
+// Must use AppearanceBase::getSkeleton(): Entity::getSkeleton() returns a type whose virtuals crash.
 static bool fpGetHeadWorld(Ogre::Vector3& out)
 {
     if (!s_freeMoveAnchor || !s_freeMoveAnchor->movement) return false;
@@ -158,10 +150,7 @@ static bool fpGetHeadWorld(Ogre::Vector3& out)
     CharMovement* mvB   = s_freeMoveAnchor->movement;
     Ogre::Vector3 root  = mvB->pos;
 
-    // hasBone validates the skeleton and picks a bone that exists, so
-    // getBoneWorldPosition never sees a missing bone. The true-world path prefers the
-    // head bone; the synthetic path prefers the neck, which keeps animating while the
-    // head is scale-hidden.
+    // hasBone guards getBoneWorldPosition against a missing bone.
     static const char* const BONE_TRUE[]  = { "Bip01 Head", "Bip01 Neck", "Head", "Bip01 Neck1" };
     static const char* const BONE_SYNTH[] = { "Bip01 Neck", "Bip01 Head", "Bip01 Neck1", "Head" };
     static const float        BONE_SYNTH_UP[] = { 2.4f, 1.0f, 2.4f, 1.0f };
@@ -174,9 +163,7 @@ static bool fpGetHeadWorld(Ogre::Vector3& out)
 
     if (s_fpTrueBoneEye)
     {
-        // getBoneWorldPosition gives the bone's true world position, independent of the view
-        // yaw, so a pure pan does not swing the eye on an arc as root + rotate(offset, yaw)
-        // did.
+        // True world position, so a pure pan no longer swings the eye on an arc.
         Ogre::Vector3 head = s_freeMoveAnchor->getBoneWorldPosition(std::string(used));
         float ddx = head.x - root.x, ddy = head.y - root.y, ddz = head.z - root.z;
         bool plausible = (ddx*ddx + ddy*ddy + ddz*ddz) < 30.0f * 30.0f
@@ -200,8 +187,7 @@ static bool fpGetHeadWorld(Ogre::Vector3& out)
         // Implausible (skeleton still loading or an odd rig): use the synthetic path.
     }
 
-    // The bone's derived position is model space relative to the character root, and
-    // the entity node transform is stale, so rotate the offset by the view yaw.
+    // Model-space offset with a stale entity node transform, so rotate by the view yaw.
     Ogre::OldBone* b = sk->getBone(used);
     if (!b) return false;
     s_fpBoneEyeUp = (strstr(used, "Neck") != nullptr) ? 2.4f
@@ -228,8 +214,7 @@ static bool fpGetHeadWorld(Ogre::Vector3& out)
     return plausible;
 }
 
-// The captured cursor sits at the viewport center, so LMB/RMB act on what the
-// crosshair covers. Load teardown nulls the pointer; it is recreated on the fresh GUI.
+// Load teardown nulls the pointer; it is recreated on the fresh GUI.
 static void fpShowCrosshair(bool show)
 {
     if (show && !s_fpCrosshair)
@@ -334,7 +319,7 @@ static void enterFirstPerson()
     Ogre::Camera* oc = cam->camera;
     if (!oc) return;
 
-    cam->stopFollowing();   // zoom is left untouched, so the restored view is the pre-FP view
+    cam->stopFollowing();   // zoom untouched, so exit restores the pre-FP view
     s_fpHadAutoTrack = (oc->getAutoTrackTarget() != nullptr);
     oc->setAutoTracking(false);
     s_fpSavedCamPos    = oc->getPosition();
@@ -365,9 +350,7 @@ static void enterFirstPerson()
         AppearanceBase* ap = s_freeMoveAnchor->getAppearance();
         if (ap) { ap->shaveHead(true); s_fpHairHidden = true; DebugLog("[WASDCombat] dc_fp_hair_hidden"); }
     }
-    // Kenshi sizes the grass range for the high top-down camera, so at ground level
-    // grass pops in at the edge of a short ring. Widen the range while first person
-    // owns the view, and restore the exact saved values on exit.
+    // Kenshi sizes the grass range for the high RTS camera, so widen it while in first person.
     if (options && s_fpGrassRangeMult > 1.0f && !s_fpOptRangeSaved)
     {
         s_fpSavedGrassRange   = options->grassRange;
@@ -385,7 +368,7 @@ static void enterFirstPerson()
     s_fpMoveSpeed       = 0.0f;
     s_fpMoveFwdSmooth   = 0.0f;
     s_fpFeetTickMs      = 0;
-    s_fpSmValid         = false;    // re-seeded on the first frame
+    s_fpSmValid         = false;
     s_fpEnemyClearSmooth = 1.0f;
     s_fpEnemyNearestDist = -1.0f;
     s_fpLastStreamValid = false;    // forces a streaming teleport on the first FP frame
@@ -411,11 +394,9 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
         return;
     }
 
-    // Any open UI releases the mouse so the free OS cursor can click menu items.
     fpShowCrosshair(!uiOpen);
 
-    // Mouse-look also pauses while the RMB hold-menu is up, so the freed cursor can
-    // browse the options; releasing RMB selects.
+    // The RMB hold-menu also frees the cursor to browse options; releasing RMB selects.
     bool rmbHeld    = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
     bool ctxVisible = ou->player->contextMenu.isVisible();
     if (rmbHeld || ctxVisible)
@@ -468,8 +449,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
                 s_fpPitch -= dy * FP_RAD_PER_PIXEL * s_fpSensitivityFP;
                 if (s_fpPitch >  FP_PITCH_LIMIT) s_fpPitch =  FP_PITCH_LIMIT;
                 if (s_fpPitch < -FP_PITCH_LIMIT) s_fpPitch = -FP_PITCH_LIMIT;
-                // The point-click FollowTurn yields until the mouse has been still for
-                // FollowDelayMs; the deadzone ignores 1 px jitter.
+                // FollowTurn yields until the mouse has been still for FollowDelayMs.
                 if (dx > 1.0f || dx < -1.0f || dy > 1.0f || dy < -1.0f)
                     s_fpLastMouseMoveMs = GetTickCount64();
             }
@@ -484,16 +464,10 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
 
     CharMovement* mvFP = s_freeMoveAnchor->movement;
 
-    // currentlyMoving/currentSpeed are set whatever issued the move, so this covers
-    // point-click and autonomous combat/heal movement as well as WASD.
+    // currentlyMoving covers point-click and autonomous movement, not only WASD.
     bool fpMoving = mvFP->currentlyMoving || mvFP->currentSpeed > 0.25f;
 
-    // WASD (and a grace period while still coasting): face the body to the view, so
-    // movement is strafe-relative and the camera yaw is never touched. Without the
-    // grace, the body still faces 180 degrees from the view on the release frame of a
-    // backpedal, and the idle neck-limit snaps the camera onto it.
-    // Point-click/autonomous: the camera follows the heading.
-    // Idle: the neck-limit turns the body when the view turns too far.
+    // The release grace stops the neck limit snapping the camera onto a backpedal-facing body.
     bool strafeGrace = (GetTickCount64() - s_wasdLastHeldMs) < FP_STRAFE_GRACE_MS;
     if (s_frameWasdHeld || (fpMoving && strafeGrace))
     {
@@ -510,9 +484,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
     else if (fpMoving && s_fpFollowTurn > 0.0f
              && (GetTickCount64() - s_fpLastMouseMoveMs) > (ULONGLONG)s_fpFollowDelayMs)
     {
-        // The character walks its own path here, so the view follows the heading; the
-        // game's pathing owns mvFP->direction. It runs only after the mouse has been still
-        // for FollowDelayMs, so it never fights active mouse-look.
+        // Runs only after FollowDelayMs of mouse stillness, so it never fights mouse-look.
         Ogre::Vector3 hd = mvFP->direction;
         hd.y = 0.0f;
         float hlen = hd.length();
@@ -555,9 +527,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
         }
     }
 
-    // Only the visuals use the smoothed view; body facing and motion use the raw
-    // target. A smaller per-frame rotation reduces the grass re-facing mismatch on the
-    // render thread, so foliage flickers less. LookSmooth=0 gives the raw value exactly.
+    // Only visuals use the smoothed view: smaller rotations reduce render-thread grass flicker.
     if (!s_fpSmValid) { s_fpYawSm = s_fpYaw; s_fpPitchSm = s_fpPitch; s_fpSmValid = true; }
     {
         float a = 1.0f - s_fpLookSmooth;   // 1.0 = snap (off), <1 = glide
@@ -574,9 +544,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
         Ogre::Quaternion(Ogre::Radian(s_fpYawSm),   Ogre::Vector3::UNIT_Y) *
         Ogre::Quaternion(Ogre::Radian(s_fpPitchSm), Ogre::Vector3::UNIT_X);
 
-    // Scale the forward eye offsets down as a hostile gets close, so an aggressor
-    // pressing into the lens pulls the eye back to the hidden skull instead of the eye
-    // entering their model.
+    // A close hostile pulls the eye back so it does not enter the aggressor's model.
     {
         float enemyScale = 1.0f;
         if (s_fpEnemyClearRadius > 0.0f && s_fpEnemyNearestDist >= 0.0f
@@ -589,18 +557,14 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
         s_fpEnemyClearSmooth += (enemyScale - s_fpEnemyClearSmooth) * 0.15f;
     }
 
-    // Legacy path: height is smoothed to damp stride bob, and horizontal position is
-    // hard-attached so a sprinting model cannot outrun the camera.
+    // Horizontal position is hard-attached so a sprinting model cannot outrun the camera.
     Ogre::Vector3 eye;
     Ogre::Vector3 headWorld;
     if (fpGetHeadWorld(headWorld))
     {
       if (s_fpTrueBoneEye)
       {
-        // The eye is welded to the head bone's world Y (no bob smoothing) and pushed
-        // forward along the yaw only, so looking down does not sink the eye into the
-        // chest. Ground speed from the feet delta drives the forward lead; the
-        // currentMotion magnitude is too noisy for this.
+        // Pushed forward along yaw only, so looking down does not sink the eye into the chest.
         {
             ULONGLONG nowF = GetTickCount64();
             float dt = (s_fpFeetTickMs > 0) ? (float)(nowF - s_fpFeetTickMs) * 0.001f : 0.0f;
@@ -629,16 +593,13 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
         }
         s_fpMoveFwdSmooth += (lead - s_fpMoveFwdSmooth) * 0.15f;
 
-        // While climbing, shrink the forward push and lift the eye so the camera clears
-        // the rising steps. On flat ground ascent01 is 0, so this is inert.
         float ascent01 = (s_fpClimbSpeedSmooth > 0.0f)
                        ? s_fpClimbSpeedSmooth * s_fpStairForwardReduce : 0.0f;
         if (ascent01 > 1.0f) ascent01 = 1.0f;
         float ascentScale = 1.0f - ascent01 * (1.0f - s_fpStairForwardMinScale);
         float stairLift   = s_fpStairEyeLift * ascent01;
 
-        // The speed factor must update on this path too: it drives the MoveNearClip blend,
-        // which was dead under TrueBoneEye when only the legacy path updated it.
+        // Must update on this path too: it drives the MoveNearClip blend.
         {
             float leanTarget = (s_fpMoveSpeedRef > 1.0f)
                              ? s_fpMoveSpeed / s_fpMoveSpeedRef : 0.0f;
@@ -693,8 +654,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
             s_fpHeadSmooth.z  = headWorld.z;
             s_fpHeadSmooth.y += (headWorld.y - s_fpHeadSmooth.y) * FP_BONE_SMOOTH;
         }
-        // At jog/sprint the model pitches forward and swings the arms and chest up into
-        // view, so raise the eye and push it forward with speed. Walking is unaffected.
+        // At jog/sprint the model pitches forward into view, so raise and push the eye with speed.
         {
             float spd = mvFP->currentMotion.length();
             float leanTarget = spd * 0.04f;          // about 1.0 at jog speed
@@ -707,9 +667,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
             + q * Ogre::Vector3(0.0f, s_fpBoneEyeUp + s_fpEyeUpAdjust + leanUp,
                                 -((s_fpFwdOffset + leanFwd) * s_fpEnemyClearSmooth));
 
-        // The bone pose read this frame is last frame's animation, which leaves the camera
-        // a stride behind at sprint. Feed forward velocity ahead by the frame time, along
-        // the view forward only: a lateral or backward offset made strafing twitch.
+        // The bone pose lags a frame; lead along view forward only, as lateral leads made strafing twitch.
         {
             static ULONGLONG s_fpLastTickMs = 0;
             ULONGLONG nowFF = GetTickCount64();
@@ -725,8 +683,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
                 eye += viewFwd * (fwdComp * dt);
         }
 
-        // Keyed off the discrete gait tier, not the noisy currentMotion magnitude, and gated
-        // on actual movement so point-click and combat running get it as well. WALK is 0.
+        // Keyed off the gait tier because the currentMotion magnitude is too noisy.
         {
             float gaitTarget = 0.0f;
             if (fpMoving)
@@ -744,8 +701,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
             }
         }
 
-        // Attack swings, blocks, heals, revives and get-ups swing the body into the lens
-        // even while standing, which the gait push cannot help. 0 (default) = off.
+        // Swings, blocks and get-ups push the body into the lens even while standing.
         {
             bool actionNow = s_fpActionClearFwd > 0.0f
                           && isCommittedAction(s_freeMoveAnchor);
@@ -776,9 +732,6 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
     if (s_fpNode)
     {
         Ogre::Vector3 camPos = eye;
-        // FreezeCamTest (diagnostic): while standing, lock the camera position so a pan
-        // changes only the orientation. This tests whether the grass pager reads the
-        // camera position.
         if (s_fpFreezeCamTest && !fpMoving)
         {
             if (!s_fpFrozenValid) { s_fpFrozenEye = eye; s_fpFrozenValid = true; }
@@ -789,10 +742,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
         s_fpNode->setOrientation(q);
     }
 
-    // MoveNearClip pushes the near plane out at speed to slice away the arms that the
-    // jog/sprint animation sweeps into the lens. EnemyNearClip pulls it in while a
-    // hostile overlaps the lens, so the plane slices a thin cross-section instead of
-    // opening a big hole in the aggressor; it wins because it takes the minimum.
+    // Taking the minimum lets EnemyNearClip win, slicing a thin section instead of a hole.
     if (thisptr->camera)
     {
         float nc = s_fpNearClipFP;
@@ -810,10 +760,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
         thisptr->camera->setNearClipDistance(nc);
     }
 
-    // teleport() keeps the rig coherent (audio listener, zone streaming), but it is a
-    // jump: calling it every frame makes the streamer re-page grass continuously, so
-    // foliage flickers while moving. Re-teleport only after the eye has moved
-    // StreamUpdateDist; StreamUpdateDist=0 restores the every-frame behavior.
+    // teleport() every frame re-pages grass continuously, so it waits for StreamUpdateDist.
     bool doStream = !s_fpLastStreamValid || s_fpStreamDist <= 0.0f
                   || eye.squaredDistance(s_fpLastStreamPos)
                      >= s_fpStreamDist * s_fpStreamDist;
@@ -826,14 +773,7 @@ static void fpDriveFrame(CameraClass* thisptr, bool uiOpen)
         s_fpLastStreamValid = true;
     }
 
-    // The foliage pager streams grass around the camera CENTER node, which lags at the
-    // feet while first person renders from the head (technique from KenshiFP):
-    // 1. Move the center only while moving. The eye swings in a small circle during a
-    //    pan, so moving the center then re-scatters the distant grass.
-    // 2. Set the world position with _setDerivedPosition, because the eye lives under
-    //    our own node.
-    // 3. Force the derived-position recompute, so the same frame's paging pass reads
-    //    the new center instead of a stale value.
+    // Grass pages around the center node, so move it only while moving (technique from KenshiFP).
     if (s_fpFoliageCenterMode && thisptr->center && s_fpNode && fpMoving)
     {
         Ogre::Vector3 eyeWorld = s_fpNode->_getDerivedPositionUpdated();

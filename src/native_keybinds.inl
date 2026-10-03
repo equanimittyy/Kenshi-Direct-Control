@@ -1,16 +1,13 @@
 static bool s_processKeysHookOk = false;  // native registration needs the event reader too
 
-// The game saves bound plugin commands to controls.cfg, but this INI copy also
-// covers the case where a command is unbound at save time.
+// The INI copy covers a command that is unbound when the game saves controls.cfg.
 static const int DC_CMD_COUNT = 1;
 static const char* const DC_CMD_NAMES[DC_CMD_COUNT] =
 {
     "dc_toggle"
 };
 
-// Format v1 stored Command::bound, which is not the keycode, so rebinds never
-// survived a restart.  v2 stores the real keycode from getBoundKeys().  Older
-// files are ignored and re-stamped, so they cannot bind the command to key 1.
+// v1 stored Command::bound, not the keycode; older files are ignored and re-stamped.
 static const int DC_NATIVE_BIND_FORMAT_VERSION = 2;
 
 // Do NOT read Command::bound here: it is an internal value, not the keycode.
@@ -22,8 +19,7 @@ static int readBoundKey(const char* name)
     return keys[0];
 }
 
-// Change detection only.  getBoundKeys allocates, which is too costly to poll;
-// Command::bound is not the keycode, but it differs per binding.
+// Change detection only: getBoundKeys allocates, and Command::bound differs per binding.
 static int readChangeToken(const char* name)
 {
     if (!key) return INT_MIN;
@@ -134,8 +130,7 @@ static void applyNativeBindsFromIni(InputHandler* self)
         int v = (int)GetPrivateProfileIntA("NativeBinds", DC_CMD_NAMES[i], -1, path);
         if (v > 0)
         {
-            // bind() adds a key and does not replace, so without the unbind the
-            // default and the saved key would both fire.
+            // bind() adds and does not replace, so without the unbind both keys would fire.
             self->unbind(std::string(DC_CMD_NAMES[i]));
             self->bind(DC_CMD_NAMES[i], v);
             int after = readBoundKey(DC_CMD_NAMES[i]);
@@ -154,8 +149,7 @@ static void applyNativeBindsFromIni(InputHandler* self)
     DebugLog(cbuf);
 }
 
-// Returns -1 when the user never rebound the command.  The version gate must
-// match applyNativeBindsFromIni.
+// The version gate must match applyNativeBindsFromIni.
 static int iniSavedNativeBind(const char* name)
 {
     char path[MAX_PATH];
@@ -166,10 +160,7 @@ static int iniSavedNativeBind(const char* name)
     return (v > 0) ? v : -1;
 }
 
-// The game runs InputHandler::loadConfig before RE_Kenshi loads plugins, so this
-// is called from the first mainLoop pass; the loadConfig hook only covers a
-// later config reload.  Movement keys must never be registered: one command per
-// key, and the vanilla camera owns W/A/S/D.
+// loadConfig runs before plugins load, so the first mainLoop pass registers instead.
 static void registerNativeCommands(InputHandler* self)
 {
     if (s_nativeCommandsRegistered || !self) return;
@@ -179,9 +170,7 @@ static void registerNativeCommands(InputHandler* self)
         DebugLog("[WASDCombat] dc_native_keybinds_skipped_no_event_reader");
         return;
     }
-    // With a saved rebind, register with no key: Kenshi allows one command per
-    // key, so claiming plain V would steal it from any vanilla command bound
-    // there, every session.
+    // With a saved rebind, claim no key: plain V would steal a vanilla binding every session.
     const int savedToggle = iniSavedNativeBind("dc_toggle");
     self->addCommand("dc_toggle",        0,
                      (savedToggle > 0) ? OIS::KC_UNASSIGNED : OIS::KC_V,
@@ -243,8 +232,7 @@ static void optionsCreate_hook(OptionsWindow* self)
     }
 }
 
-// Events stay in key->events for exactly one processKeys cycle.  No pause gate:
-// the toggle must work while the game is paused.
+// Events live one processKeys cycle; no pause gate, so the toggle works while paused.
 static void (*s_processKeysOrig)(GameWorld* thisptr);
 static void processKeys_hook(GameWorld* thisptr)
 {

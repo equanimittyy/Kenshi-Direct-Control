@@ -1,5 +1,4 @@
-// Shared by the poll thread and the native processKeys path, so loot-suspend gating is
-// identical on both.
+// Shared by the poll thread and processKeys, so loot-suspend gating matches.
 static void handleTogglePress()
 {
     if (s_lootUiSuspendActive)
@@ -40,8 +39,7 @@ static void handleSneakPress()
 {
     if (s_lootUiSuspendActive)
         return;
-    // A chord, so a bare C press never collides with vanilla or other mods. Final gating
-    // runs on the game thread where the edge is consumed.
+    // A chord, so a bare C press never collides with vanilla or other mods.
     if (s_mode != MODE_FREE_MOVE || !s_firstPersonActive)
         return;
     if (!(GetAsyncKeyState(VK_SHIFT) & 0x8000))
@@ -82,8 +80,7 @@ static DWORD WINAPI PollThread(LPVOID)
     {
         Sleep(50);
         if (!isKenshiForeground()) continue;
-        // Toggle polling stands down once its native command is registered; presses then
-        // arrive through processKeys.
+        // Toggle presses arrive through processKeys once the native command is registered.
         for (int i = 0; i < NUM_KEYS; ++i)
         {
             int role = s_keys[i].role;

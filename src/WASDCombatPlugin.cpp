@@ -39,8 +39,7 @@
 #include <limits.h>
 #include <mygui/MyGUI.h>
 
-// Declared by hand because <kenshi/gui/ManagementScreen.h> does not compile (broken
-// ReorderableList template). Signatures must match that header exactly or the link fails.
+// Hand-declared: <kenshi/gui/ManagementScreen.h> does not compile; signatures must match it.
 class ManagementScreen
 {
 public:
@@ -54,8 +53,7 @@ public:
 
 #define LOOT_DIAG 0
 
-// The .inl files are fragments of this one translation unit, not headers: they share
-// file-static state and must stay in this order.
+// The .inl files are ordered fragments of this one translation unit and share file-static state.
 #include "config.inl"
 #include "state.inl"
 #include "camera_state.inl"
@@ -71,12 +69,7 @@ public:
 #include "game_hooks.inl"
 #include "native_keybinds.inl"
 
-// Required gate for any hook installed by raw RVA.  GetRealAddress hooks are
-// symbol-based and survive exe changes; raw RVAs do not.  RE_Kenshi regenerates
-// its patched exe on its own updates and shifts all code, so a stale RVA patches
-// the middle of an unrelated instruction while MinHook still reports SUCCESS.
-// Record `expected` from the same exe the RVA came from.  On a mismatch the hook
-// is skipped, so the feature degrades without corruption.
+// Raw RVAs go stale when RE_Kenshi rebuilds its exe, and MinHook still reports success.
 static bool verifyPatchSiteBytes(intptr_t addr, const unsigned char* expected,
                                  size_t len, const char* name)
 {
@@ -98,7 +91,7 @@ static bool verifyPatchSiteBytes(intptr_t addr, const unsigned char* expected,
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH)
-        s_thisModule = hModule;   // for the keybind INI path (DLL directory)
+        s_thisModule = hModule;
     if (reason == DLL_PROCESS_DETACH)
         DebugLog("WASDCombatPlugin: unloaded");
     return TRUE;
@@ -108,8 +101,7 @@ __declspec(dllexport) void startPlugin()
 {
     DebugLog("WASDCombatPlugin v1.8.4 — fix post-KO movement (combat-anim buffer gated on actual combat mode); OTS action camera");
 
-    // Loaded unconditionally so the poll thread works if native command
-    // registration never happens (load order or hook failure).
+    // Loaded unconditionally: native command registration can fail or never happen.
     loadKeybinds();
 
     if (KenshiLib::SUCCESS != KenshiLib::AddHook(
@@ -199,11 +191,7 @@ __declspec(dllexport) void startPlugin()
     else
         DebugLog("WASDCombatPlugin: addOrder hook OK");
 
-    // playerMove is not installed.  On the current exe, RVA 0x7F95F0 is one byte
-    // into a 5-byte call inside a NavMesh path function, so the MinHook jump byte
-    // became that call's displacement and pathfinding that reached it jumped into
-    // unmapped memory (crash: pack bull + right-click inside a hive home).  The
-    // RMB press-edge poll and the addOrder/addJob gates cover its job.
+    // playerMove is not installed: RVA 0x7F95F0 is stale and patching it crashed pathfinding.
 
     if (KenshiLib::SUCCESS != KenshiLib::AddHook(
             KenshiLib::GetRealAddress(&CombatClass::_NV_go),
@@ -212,13 +200,9 @@ __declspec(dllexport) void startPlugin()
     else
         DebugLog("WASDCombatPlugin: combatGo hook OK");
 
-    // initCombatMode and youKnowImAttacking are deliberately not hooked: DC must
-    // not block combat entry or attack notifications, only the per-frame go().
+    // initCombatMode and youKnowImAttacking stay unhooked: DC must not block combat entry.
 
-    // showTradeWindow is not installed.  On the current exe, RVA 0x7905D0 is
-    // inside a 10-byte movabs of a double-to-int64 conversion helper, so the patch
-    // corrupted that helper's common path while the hook itself never fired.  The
-    // mainLoop GUI poll (isAnyInventoryWindowOpen) covers loot/trade detection.
+    // showTradeWindow is not installed: RVA 0x7905D0 is stale and patching it corrupted a helper.
 
     HANDLE h = CreateThread(nullptr, 0, PollThread, nullptr, 0, nullptr);
     if (!h)

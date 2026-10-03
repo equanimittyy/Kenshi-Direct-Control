@@ -10,14 +10,9 @@ static bool isKenshiForegroundMain()
     return pid == GetCurrentProcessId();
 }
 
-// First-person mouse-look reads a second, non-exclusive background DirectInput
-// mouse, so the game keeps its own input. A 1 kHz thread accumulates the relative
-// counts and each frame takes the total, which makes the look independent of the
-// frame rate (GetCursorPos/SetCursorPos sampling felt sluggish at high fps).
-// DirectInput8Create and the GUIDs are resolved here because the dxguid/dinput8
-// import libs are not reliably on the v100 lib path.
+// Non-exclusive 1 kHz DirectInput mouse: cursor sampling lagged at high fps.
 typedef HRESULT (WINAPI *DI8Create_t)(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN);
-static const GUID DIFP_GUID_SysMouse =
+static const GUID DIFP_GUID_SysMouse =  // dxguid/dinput8 libs are not on the v100 lib path
     { 0x6F1D2B60, 0xD5A0, 0x11CF, { 0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00 } };
 static const GUID DIFP_IID_IDirectInput8A =
     { 0xBF798030, 0x483A, 0x4DA2, { 0xAA, 0x99, 0x5D, 0x64, 0xED, 0x36, 0x97, 0x00 } };

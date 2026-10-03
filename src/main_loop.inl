@@ -1,13 +1,3 @@
-// mainLoop_hook execution order:
-//   1. Safety gate (load-guard)
-//   2. Selection tracking
-//   3. V-Mode transition
-//   4. HUD
-//   5. Pre-AI WASD
-//   6. s_mainLoopOrig (AI + CharMovement::update + CombatClass::go)
-//   7. Post-AI combat job suppression
-//   8. Periodic squad-threat scan
-//   9. Post-AI WASD re-application + instant stop
 static void (*s_mainLoopOrig)(GameWorld* thisptr, float time);
 
 static void mainLoop_hook(GameWorld* thisptr, float time)
@@ -91,7 +81,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         {
             if (ouNull)
             {
-                // Game world gone — full hard shutdown regardless of user intent.
                 if (!s_dcShutdownInProgress)
                 {
                     s_dcShutdownInProgress = true;
@@ -131,8 +120,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
 
             if (s_userWantsDC)
             {
-                // A real save-load frees the anchor while ou->player can still be valid, so never
-                // dereference it here: drop it and keep s_userWantsDC so the reacquire restores DC.
+                // A save-load frees the anchor while ou->player can still be valid: never dereference it here.
                 if (ou->isLoadingFromASaveGame())
                 {
                     if (!s_dcPtrLossActive)
@@ -152,8 +140,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                     return;
                 }
 
-                // Chunk microload (null player, no save-load flag): characters are not freed, so the
-                // anchor dereference below is safe.
+                // A chunk microload does not free characters, so the anchor dereference below is safe.
                 if (!s_dcPtrLossActive)
                 {
                     s_dcPtrLossActive      = true;
@@ -259,7 +246,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             }
         }
 
-        // Fallback: the shutdown block normally clears the load guard; clear it here so it cannot stick.
+        // Fallback so the load guard cannot stick.
         if (s_loadGuardActive)
         {
             s_loadGuardActive        = false;
@@ -269,8 +256,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         }
     }
 
-    // SaveManager::newGame() sets NEWGAME (0x4) before world teardown; LOADGAME (0x2) cannot match.
-    // The LOADGAME path sets the shutdown and load-guard flags after teardown begins.
+    // newGame() sets NEWGAME (0x4) before world teardown; the LOADGAME (0x2) path sets the flags too late.
     {
         SaveManager* sm = SaveManager::getSingleton();
         if (sm && sm->signal == SaveManager::NEWGAME
@@ -283,8 +269,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             s_userWantsDC = false;
             s_userWantsFP = false;
 
-            // Exit OTS and first person while the anchor and camera are valid: exitOTS re-attaches the
-            // detached camera to the rig, otherwise character creation shows no character.
+            // Exit while the camera is valid, or character creation shows no character.
             if (s_fpActive) exitOTS(true);
             if (s_firstPersonActive) exitFirstPerson(true);
             s_fpSuspendedForInv = false;
@@ -300,8 +285,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                     ou->player->camera->objectCurrentlyFollowingOffset.y = s_savedCamFollowOffY;
                 }
             }
-            // Set both modes so the step-3 exit transition does not stop tracking again or show
-            // "Direct Control Disabled".
+            // Set both modes so the step-3 exit transition does not run again.
             s_mode          = MODE_VANILLA;
             s_fmTrackedMode = MODE_VANILLA;
             DebugLog("[WASDCombat] dc_newgame_forced_vanilla_mode");
@@ -350,7 +334,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         }
     }
 
-    // V-Mode processing pauses while any inventory window is open; s_mode does not change.
     {
         bool anyInvOpen      = gui && gui->isAnyInventoryWindowOpen();
         int  numInvOpen      = gui ? gui->getNumOpenInventoryWindows() : 0;
@@ -409,11 +392,9 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
 
         bool moveThrough = invMoveThroughEligible();
 
-        // showTradeWindow_hook can set the suspension before the window is visible; this block
-        // confirms the open and close edges.
+        // The trade hook can set the suspension before the window is visible.
         if (moveThrough)
         {
-            // Move-through: lift any early suspend from the trade hook so movement and tracking continue.
             if (s_lootUiSuspendActive)
             {
                 s_lootUiSuspendActive  = false;
@@ -425,8 +406,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                 if (s_freeMoveAnchor && ou->player)
                     ou->player->startTrackCharacter(s_freeMoveAnchor);
             }
-            // Kenshi auto-pauses on inventory open and on a squad-member switch. Undo only pauses inside
-            // the grace window after those edges; a later pause is the player's own and stays.
+            // Undo only auto-pauses inside the grace window; a later pause is the player's.
             Character* mtShownChar = gui->inventoryWindowCharacter.getCharacter();
             bool mtOpenEdge   = !s_invMoveThroughActive;
             bool mtSwitchEdge = s_invMoveThroughActive
@@ -468,8 +448,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             }
             s_lootUiWasPrevOpen = true;
 
-            // Vanilla never closes a merchant trade window on distance, so close it after the anchor
-            // walks away. Trades with your own squad must not auto-close.
+            // Vanilla never closes a merchant trade on distance; own-squad trades must not auto-close.
             Character* trader = gui->inventoryWindowTrader.getCharacter();
             if (trader && !trader->isPlayerCharacter() && !s_invTradeCloseRequested)
             {
@@ -494,7 +473,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         }
         else if (s_invMoveThroughActive)
         {
-            // Move-through ends: leave the game running, because the player owns pause now.
+            // Leave the game running: the player owns pause now.
             s_invMoveThroughActive    = false;
             s_invMoveThroughForcedRun = false;
             s_invMoveThroughPlayerPaused = false;
@@ -516,8 +495,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                 s_lootUiSuspendActive  = true;
                 s_lootSuspendStartTick = GetTickCount64();
             }
-            // Do not re-derive s_tradeWindowActive from the npc/trader/tradeA/tradeB fields: they stay
-            // stale after a trade closes and mark later own-inventory opens as trades.
+            // Do not re-derive s_tradeWindowActive from the gui trade fields: they stay stale after close.
             s_lootUiWasPrevOpen = true;
             DebugLog("[WASDCombat] loot_ui_open_suspend_vmode");
             if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && !s_cameraLockInvSuspend)
@@ -580,21 +558,17 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         }
     }
 
-    // Safety net: the face-cam normally exits in cameraUpdate_hook.
     if (s_fpActive && !isOwnInventoryOpen())
         exitOTS(true);
 
-    // Register here, not in the loadConfig hook: the game loads its keyboard config before
-    // RE_Kenshi loads plugins.
+    // Registered here: the game loads its keyboard config before RE_Kenshi loads plugins.
     if (!s_nativeCommandsRegistered)
         registerNativeCommands(key);
 
-    // The watchdog saves rebinds even when the options menu never calls saveOptions.
     if (s_nativeCommandsRegistered)
         watchNativeBindChanges();
 
-    // Hooks inside s_mainLoopOrig read these snapshots, not the volatiles, to avoid a memory
-    // fence on each of 100+ calls per frame.
+    // Hooks read these snapshots, not the volatiles, to avoid a fence on 100+ calls per frame.
     s_frameMode        = s_mode;
     s_frameWasdHeld    = s_wHeld || s_aHeld || s_sHeld || s_dHeld;
     s_frameLootSuspend = s_lootUiSuspendActive;
@@ -695,8 +669,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         else if (curInVM && s_freeMoveAnchor && !s_lootUiSuspendActive)
         {
             Character* sel = s_selectedCharacter;
-            // Switch control by portrait double-click or F. A single click only selects, so other
-            // NPCs can be inspected without taking control (Sentient Sands compatibility).
+            // A single click only selects, so NPCs can be inspected (Sentient Sands compatibility).
             ULONGLONG dcMs       = s_lmbDoubleClickMs;
             bool      dcSwitch   = (dcMs > 0 && (GetTickCount64() - dcMs) <= 600);
             bool      fSwitch    = s_fSelectEdge;
@@ -705,8 +678,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             {
                 s_lmbDoubleClickMs    = 0;
                 s_fSelectEdge         = false;
-                // The FP head and hair hide is per character, and fpSetHeadBoneHidden acts on the current
-                // anchor: restore the old anchor before the switch, then hide the new one.
+                // Head hiding acts on the current anchor: restore the old one before the switch.
                 if (s_firstPersonActive && s_fpHeadBoneHidden)
                     fpSetHeadBoneHidden(false);
                 if (s_firstPersonActive && s_fpHairHidden)
@@ -724,7 +696,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                 s_consciousAllyThreat = false;
                 s_enemyTargetingLogged = false;
                 s_lastScanTick          = 0;
-                // The new anchor has no WASD hold; its vanilla orders continue until the first release.
                 s_wasdHoldActive         = false;
                 s_playerPointClickActive = false;
                 s_holdPosValid           = false;
@@ -750,8 +721,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         s_fmTrackedMode = curMode;
     }
 
-    // The poll thread must never touch the camera, so the P edge is consumed here. A manual
-    // toggle also cancels a pending return to first person after the inventory closes.
+    // The poll thread must never touch the camera, so the P edge is consumed here.
     if (s_fpToggleRequested)
     {
         s_fpToggleRequested = false;
@@ -773,7 +743,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         }
     }
 
-    // Re-enter first person after a load or stream dropped it; enterFirstPerson is idempotent.
+    // enterFirstPerson is idempotent; this re-enters after a load or stream drops first person.
     if (s_userWantsFP && !s_firstPersonActive && !s_fpActive && !s_fpSuspendedForInv
         && !s_otsRestorePending && s_mode == MODE_FREE_MOVE
         && !s_dcShutdownInProgress && !s_loadGuardActive
@@ -784,9 +754,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         enterFirstPerson();
     }
 
-    // Use the game's sneak button handler so the SNEAK checkbox, standing order, and stealth
-    // state stay in sync; setStealthMode alone leaves the button off. Sneak persists after
-    // FP or DC exit because it is vanilla state.
+    // setStealthMode alone leaves the SNEAK button off, so drive the button's own handler.
     if (s_sneakToggleRequested)
     {
         s_sneakToggleRequested = false;
@@ -811,8 +779,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         }
     }
 
-    // Nearest live hostile for the FP clip clearance in fpDriveFrame. The squared-distance
-    // cull runs before any game call to keep the per-frame cost low.
+    // Feeds the FP clip clearance in fpDriveFrame.
     s_fpEnemyNearestDist = -1.0f;
     if (s_firstPersonActive && s_fpEnemyClearRadius > 0.0f
         && s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && s_freeMoveAnchor->movement
@@ -841,7 +808,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             s_fpEnemyNearestDist = sqrtf(best2);
     }
 
-    // Suspend movement injection and the camera lock on a turret; restore once on exit.
     if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && !s_lootUiSuspendActive && ou->player)
     {
         bool atTurret = isUsingStationaryTurret(s_freeMoveAnchor);
@@ -857,8 +823,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             ou->player->startTrackCharacter(s_freeMoveAnchor);
         }
     }
-    // A menu pause stops WASD momentum once; the camera lock and anchor stay. Inventory
-    // auto-pause is excluded because the loot suspension owns it.
+    // Inventory auto-pause is excluded: the loot suspension owns it.
     if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor)
     {
         bool inventoryPausing = s_lootUiSuspendActive || (gui && gui->isAnyInventoryWindowOpen());
@@ -899,7 +864,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                 DebugLog("[WASDCombat] dc_menu_suspend_skipped_inventory_pause"); } }
           else { s_skipLogged = false; } }
     }
-    // Raise the camera focus toward the chest at close zoom; taper to zero at far zoom.
     if (s_mode == MODE_FREE_MOVE && g_dcCam.dcCameraCloseZoomChestOffset && !s_fpActive && !s_firstPersonActive &&
         s_freeMoveAnchor && !s_lootUiSuspendActive && ou->player && ou->player->camera)
     {
@@ -926,8 +890,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             s_healingJobActive  = true;
             DebugLog("[WASDCombat] dc_heal_resumed_after_wasd_release");
         }
-        // An active heal yields to held WASD, like a vanilla point-click. This also frees a stuck
-        // heal flag: the job stays queued through a knockdown, so removeJob never clears it.
+        // This also frees a stuck heal flag: the job stays queued through a knockdown.
         else if (s_healingJobActive && (s_wHeld || s_aHeld || s_sHeld || s_dHeld))
         {
             s_healingJobActive  = false;
@@ -942,8 +905,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         }
         if (!(bW || bA || bS || bD) && s_wasdDownedMovementActive)
         {
-            // Cancel a live crawl order before pathfinding advances it. Level-triggered, so it also
-            // catches releases that the step-9 edge stop misses.
+            // Level-triggered, so it also catches releases that the step-9 edge stop misses.
             CharMovement* mvDC = s_freeMoveAnchor->movement;
             s_freeMoveAnchor->playerMoveOrderDefault(nullptr, nullptr, mvDC->pos);
             mvDC->halt();
@@ -952,7 +914,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         }
         if (bW || bA || bS || bD)
         {
-            // WASD breaks playing-dead like a vanilla move order; the game decides if the character can stand.
             if (!s_playDeadExitDone
                 && s_freeMoveAnchor->getProneState() == PS_PLAYING_DEAD)
             {
@@ -962,7 +923,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             }
             if (isDownedButMovable(s_freeMoveAnchor) && !downedOrderDriven(s_freeMoveAnchor))
             {
-                // Direct injection drives downed movement; only cancel a leftover crawl order.
                 if (s_wasdDownedMovementActive)
                 {
                     s_freeMoveAnchor->playerMoveOrderDefault(
@@ -1032,10 +992,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
     // 6. Original game loop: AI, CharMovement::update, and CombatClass::go.
     s_retreatLockGoSuppressed = false;
 
-    // Drive the FP camera before the loop: the foliage pass inside s_mainLoopOrig samples the
-    // camera before CameraClass::update, so a later write is a frame late and grass blinks
-    // while rotating. The second call from the camera hook is safe: the cursor recentre gives
-    // it a near-zero mouse delta, and the throttled teleport does not fire twice.
+    // Also drive the FP camera here: the foliage pass samples the camera before CameraClass::update.
     if (s_fpCamPreOrig && s_firstPersonActive && ou && ou->player && ou->player->camera
         && s_freeMoveAnchor && s_freeMoveAnchor->movement && s_mode == MODE_FREE_MOVE
         && !ou->isLoadingFromASaveGame())
@@ -1052,7 +1009,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
     // Post-loop load guard.
     if (!ou || !ou->player || ou->isLoadingFromASaveGame())
     {
-        // Hard shutdown only when ou is null or the player was freed in a confirmed save-load.
         // A null player without the load flag is a microload, so DC stays.
         bool absoluteHard      = (!ou);
         bool confirmedLoadGame = (!absoluteHard) && (!ou->player) && ou->isLoadingFromASaveGame();
@@ -1100,7 +1056,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             return;
         }
 
-        // Microload during chunk travel: keep DC and skip the post-AI steps.
+        // Chunk-travel microload: keep DC and skip the post-AI steps.
         {
             static ULONGLONG s_skipLogTick = 0;
             ULONGLONG nowSk = GetTickCount64();
@@ -1113,8 +1069,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
     if (s_dcShutdownInProgress)
         return;
 
-
-    // 8. Periodic squad-threat scan.
+// 8. Periodic squad-threat scan.
     if (s_mode == MODE_FREE_MOVE && s_freeMoveAnchor)
     {
         ULONGLONG nowMs   = GetTickCount64();
@@ -1280,8 +1235,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
     bool wasdActive = bW || bA || bS || bD;
     bool inCombat   = s_freeMoveAnchor->isInCombatMode(true, true);
 
-    // The poll-thread RMB edge is the only click signal that game-side dispatch cannot block:
-    // ground clicks during the hold never reach PlayerInterface::playerMove.
+    // Ground clicks during the hold never reach playerMove, so use the poll-thread RMB edge.
     if (s_rmbPressedEdge)
     {
         s_rmbPressedEdge = false;
@@ -1345,8 +1299,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             s_postWasdGraceActive  = false;
             s_combatReentryAllowed = false;
 
-            // WASD always wins: release the hold and clear the point-click. Record a pending click
-            // first, because only that click needs a disengage order.
+            // Record a pending click first: only that click needs a disengage order.
             bool hadPendingClick     = s_playerPointClickActive;
             s_wasdHoldActive         = false;
             s_playerPointClickActive = false;
@@ -1356,10 +1309,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             if (isUsingStationaryTurret(s_freeMoveAnchor))
                 DebugLog("[WASDCombat] stationary_crossbow_cancelled_by_wasd");
 
-            // The disengage order pathfinds. In a locked building or at its door the path fails and
-            // the game barks "I can't get out of here" on each press, even with dest = current pos.
-            // So issue it only for a pending click, when moveOrderMayBark is false and no crawl
-            // order owns movement.
+            // The disengage order pathfinds and barks "I can't get out of here" when the path fails.
             if (s_freeMoveAnchor->movement
                 && hadPendingClick
                 && !downedOrderDriven(s_freeMoveAnchor)
@@ -1571,8 +1521,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                 }
             }
 
-            // Gate on s_wasdDownedMovementActive, not isDownedButMovable: that can turn false
-            // mid-release while the WASD destination is still pending.
+            // Not isDownedButMovable: it can turn false while the WASD destination is still pending.
             if (s_wasdDownedMovementActive)
             {
                 CharMovement* mvDown = s_freeMoveAnchor ? s_freeMoveAnchor->movement : nullptr;
@@ -1605,7 +1554,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
             s_retreatTargetsCachedSkipped = 0;
             s_retreatBlockedAttackerCount    = 0;
             s_medicalJobSuppressedThisHold   = false;
-            // Fallback for when the structured release stop above did not run.
             CharMovement* mvStop = s_freeMoveAnchor->movement;
             if (mvStop && s_wasdMovementApplied &&
                 !isCommittedAction(s_freeMoveAnchor) &&
@@ -1627,8 +1575,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
                 DebugLog(buf);
             }
 
-            // Hold the character here until a new point-click, WASD press, or DC off. The release
-            // snap already cancelled any click made during the drive.
             s_wasdHoldActive         = true;
             s_playerPointClickActive = false;
         }
@@ -1636,7 +1582,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
 
     s_wasdWasActive = wasdActive;
 
-    // Post-WASD grace: block combat re-entry unless the target is close and attacking.
     if (!wasdActive)
     {
         if (s_postWasdGraceActive)
@@ -1668,8 +1613,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
         s_combatReentryAllowed = false;
     }
 
-    // s_retreatLockEverActive stays set for the whole hold, because Kenshi skips go() when no
-    // enemy is near and the retreat state would otherwise flap.
+    // Kenshi skips go() when no enemy is near, so the retreat state would otherwise flap.
     {
         bool curRetreat = wasdActive && s_retreatLockEverActive;
         if (curRetreat && !s_wasdRetreatActive)
@@ -1782,7 +1726,6 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
 #if RETREAT_VERBOSE_DIAG
                         DebugLog("[WASDCombat] attack_recovery_phase");
 #endif
-                        // Keep commitment active through recovery.
                     }
                     else if (curState == CIRCLE_MENACINGLY)
                     {
@@ -1847,8 +1790,7 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
     }
     s_prof_combatTarget += qpcNow() - _ctStart; }  // end combat-target timer
 
-    // Final hold clamp: the last DC write in the frame, after AI, taskers, and pathing.
-    // Restore only X/Z, so gravity and ramps can still settle Y.
+    // Final hold clamp after AI and pathing; X/Z only, so gravity can still settle Y.
     if (!wasdActive)
     {
         const char* gateReason = "";
