@@ -879,15 +879,6 @@ static void mlApplyPreAiWasd()
         {
             s_playDeadExitDone       = false;
         }
-        if (!(bW || bA || bS || bD) && s_wasdDownedMovementActive)
-        {
-            // Level-triggered, so it also catches releases that the step-9 edge stop misses.
-            CharMovement* mvDC = s_freeMoveAnchor->movement;
-            s_freeMoveAnchor->playerMoveOrderDefault(nullptr, nullptr, mvDC->pos);
-            mvDC->halt();
-            s_wasdDownedMovementActive = false;
-            DebugLog("[WASDCombat] dc_downed_crawl_cancelled_on_release");
-        }
         if (bW || bA || bS || bD)
         {
             if (!s_playDeadExitDone
@@ -897,42 +888,8 @@ static void mlApplyPreAiWasd()
                 s_playDeadExitDone = true;
                 DebugLog("[WASDCombat] dc_play_dead_exit_on_wasd");
             }
-            if (isDownedButMovable(s_freeMoveAnchor) && !downedOrderDriven(s_freeMoveAnchor))
-            {
-                if (s_wasdDownedMovementActive)
-                {
-                    s_freeMoveAnchor->playerMoveOrderDefault(
-                        nullptr, nullptr, s_freeMoveAnchor->movement->pos);
-                    s_wasdDownedMovementActive = false;
-                    DebugLog("[WASDCombat] dc_downed_crawl_switch_to_direct_indoors");
-                }
-            }
-            else if (isDownedButMovable(s_freeMoveAnchor))
-            {
-                applyDownedMovement(bW, bA, bS, bD);
-                s_wasdDownedMovementActive = true;
-                static ULONGLONG s_downMoveTick = 0;
-                ULONGLONG t = GetTickCount64();
-                if (t - s_downMoveTick >= 2000) { s_downMoveTick = t;
-                    ProneState prone = s_freeMoveAnchor->getProneState();
-                    if (prone == PS_PLAYING_DEAD)   DebugLog("[WASDCombat] playing_dead_state_detected");
-                    else if (prone == PS_CRIPPLED)  DebugLog("[WASDCombat] crippled_state_detected");
-                    else                            DebugLog("[WASDCombat] downed_state_detected");
-                    DebugLog("[WASDCombat] dc_crippled_state_detected");
-                    DebugLog("[WASDCombat] dc_crippled_can_move=true");
-                    DebugLog("[WASDCombat] dc_crippled_using_downed_movement_path");
-                    DebugLog("[WASDCombat] wasd_downed_movement_attempt");
-                    DebugLog("[WASDCombat] pointclick_movement_allowed_while_downed");
-                    DebugLog("[WASDCombat] wasd_downed_movement_uses_pointclick_path");
-                    DebugLog("[WASDCombat] wasd_downed_destination_created");
-                    DebugLog("[WASDCombat] wasd_downed_destination_source_wasd");
-                    if (s_freeMoveAnchor->isCrippled())
-                    {
-                        DebugLog("[WASDCombat] wasd_crippled_movement_allowed");
-                        DebugLog("[WASDCombat] wasd_crippled_movement_success");
-                    } }
-            }
-            else if (s_freeMoveAnchor->isUnconcious())
+            bool downed = isDownedButMovable(s_freeMoveAnchor);
+            if (!downed && s_freeMoveAnchor->isUnconcious())
             {
                 static ULONGLONG s_koTick = 0;
                 ULONGLONG t = GetTickCount64();
@@ -941,7 +898,7 @@ static void mlApplyPreAiWasd()
                     DebugLog("[WASDCombat] dc_crippled_can_move=false");
                     DebugLog("[WASDCombat] dc_crippled_move_blocked_reason=UNCONSCIOUS"); }
             }
-            else if (!s_cameraLockTurretSuspend && !s_menuSuspendActive)
+            else if (!downed && !s_cameraLockTurretSuspend && !s_menuSuspendActive)
             {
                 if (s_healingJobActive)
                 {
@@ -1189,16 +1146,6 @@ static void mlScanSquadThreat(GameWorld* thisptr)
 
 static void mlCancelWasdWhileInactive()
 {
-    // A live crawl order must not keep moving the character into a menu or suspend.
-    if (s_wasdDownedMovementActive
-        && s_freeMoveAnchor && s_freeMoveAnchor->movement)
-    {
-        s_freeMoveAnchor->playerMoveOrderDefault(
-            nullptr, nullptr, s_freeMoveAnchor->movement->pos);
-        s_freeMoveAnchor->movement->halt();
-        s_wasdDownedMovementActive = false;
-        DebugLog("[WASDCombat] dc_downed_crawl_cancelled_on_suspend");
-    }
     s_wasdWasActive    = false;
     s_combatWASDLogged = false;
     s_retreatLogged    = false;
@@ -1287,7 +1234,6 @@ static void mlApplyPostAiWasd(bool bW, bool bA, bool bS, bool bD, bool inCombat)
         // The disengage order pathfinds and barks "I can't get out of here" when the path fails.
         if (s_freeMoveAnchor->movement
             && hadPendingClick
-            && !downedOrderDriven(s_freeMoveAnchor)
             && !moveOrderMayBark(s_freeMoveAnchor))
         {
             Ogre::Vector3 cancelDir;
@@ -1309,8 +1255,7 @@ static void mlApplyPostAiWasd(bool bW, bool bA, bool bS, bool bD, bool inCombat)
         }
     }
 
-    if (!s_cameraLockTurretSuspend && !s_menuSuspendActive
-        && !downedOrderDriven(s_freeMoveAnchor))    // halt() would kill the outdoor crawl order each frame
+    if (!s_cameraLockTurretSuspend && !s_menuSuspendActive)
     {
         if (s_healingJobActive)
         {
@@ -1471,9 +1416,8 @@ static void mlHandleWasdRelease()
                 {
                     DebugLog("[WASDCombat] wasd_release_stop_skipped_committed_action");
                 }
-                else if (!downedOrderDriven(s_freeMoveAnchor))
+                else
                 {
-                    // The outdoor downed crawl is order-driven and stops in the downed block below.
                     s_prevWasdDir = Ogre::Vector3::ZERO;
                     DebugLog("[WASDCombat] wasd_release_vector_zeroed");
 
@@ -1497,33 +1441,11 @@ static void mlHandleWasdRelease()
             }
         }
 
-        // Not isDownedButMovable: it can turn false while the WASD destination is still pending.
-        if (s_wasdDownedMovementActive)
-        {
-            CharMovement* mvDown = s_freeMoveAnchor ? s_freeMoveAnchor->movement : nullptr;
-            if (mvDown)
-            {
-                // An order at the current position cancels the MOVE job, not only the destination.
-                s_freeMoveAnchor->playerMoveOrderDefault(nullptr, nullptr, mvDown->pos);
-                mvDown->halt();
-            }
-            ProneState proneStop = s_freeMoveAnchor ? s_freeMoveAnchor->getProneState()
-                                                    : PS_NORMAL;
-            DebugLog("[WASDCombat] wasd_downed_key_released");
-            DebugLog("[WASDCombat] wasd_downed_destination_cleared");
-            DebugLog("[WASDCombat] wasd_downed_cached_direction_cleared");
-            DebugLog("[WASDCombat] wasd_downed_movement_stopped");
-            if (proneStop == PS_CRIPPLED ||
-                (s_freeMoveAnchor && s_freeMoveAnchor->isCrippled()))
-                DebugLog("[WASDCombat] wasd_crippled_instant_stop_applied");
-            DebugLog("[WASDCombat] wasd_downed_pointclick_destination_not_persisted");
-        }
-        else if (s_freeMoveAnchor && isDownedButMovable(s_freeMoveAnchor))
+        if (s_freeMoveAnchor && isDownedButMovable(s_freeMoveAnchor))
         {
             // Not WASD-created, so this is a real point-click destination; keep it.
             DebugLog("[WASDCombat] vanilla_pointclick_downed_destination_preserved");
         }
-        s_wasdDownedMovementActive    = false;
         s_retreatLockEverActive       = false;
         s_retreatSessionCacheCount    = 0;
         s_retreatTargetsProcessed     = 0;

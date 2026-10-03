@@ -99,7 +99,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
 
 __declspec(dllexport) void startPlugin()
 {
-    DebugLog("WASDCombatPlugin v1.8.4 — fix post-KO movement (combat-anim buffer gated on actual combat mode); OTS action camera");
+    DebugLog("WASDCombatPlugin v1.4.0");
 
     // Loaded unconditionally: native command registration can fail or never happen.
     loadKeybinds();

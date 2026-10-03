@@ -198,6 +198,12 @@ COMPATIBILITY & NOTES
     the view - an engine quirk that eye-level viewing makes more
     visible (it exists in the normal camera too).
 
+CREDITS
+-------
+  The first-person grass streaming technique, which moves the
+  camera center node only while the character moves, comes from
+  KenshiFP.
+
 ================================================================
   Developed as "WASDCombatPlugin" using the RE_Kenshi SDK.
 ================================================================

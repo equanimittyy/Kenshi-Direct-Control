@@ -146,37 +146,6 @@ static bool cmuEngageIdleHold(CharMovement* thisptr, Character* chR)
     return false;
 }
 
-// Lingering combat mode fights the crawl order; CombatClass::go still sees the flag in the AI phase.
-static CombatClass* cmuDownedSuspendCombatMode(Character* chC)
-{
-    static ULONGLONG s_crippledChMovTick = 0;
-    ULONGLONG nowCC = GetTickCount64();
-    if (nowCC - s_crippledChMovTick >= 2000) { s_crippledChMovTick = nowCC;
-        DebugLog("[WASDCombat] dc_crippled_state_detected");
-        DebugLog("[WASDCombat] dc_crippled_can_move=true");
-        DebugLog("[WASDCombat] dc_crippled_using_downed_movement_path"); }
-
-    CombatClass* ccD = chC->getCombatClass();
-    if (ccD && ccD->combatModeActive)
-    {
-        ccD->combatModeActive = false;
-        return ccD;
-    }
-    return nullptr;
-}
-
-static void cmuDownedRestoreCombatMode(CombatClass* ccD)
-{
-    ccD->combatModeActive = true;
-    static ULONGLONG s_downedSteerLogTick = 0;
-    ULONGLONG nowDS = GetTickCount64();
-    if (nowDS - s_downedSteerLogTick >= 1000)
-    {
-        s_downedSteerLogTick = nowDS;
-        DebugLog("[WASDCombat] dc_downed_combat_steering_overridden");
-    }
-}
-
 // A move order replaces the queued use job, so the AI does not pull them back onto the furniture.
 static bool cmuStartFurnitureExit(CharMovement* thisptr, const Ogre::Vector3& wasdDir)
 {
@@ -358,18 +327,6 @@ static void charMovUpdate_hook(CharMovement* thisptr, float time)
         }
         s_charMovUpdateOrig(thisptr, time);
         return;
-    }
-    // halt() + setDirectMovement would cancel an order-driven crawl.
-    {
-        Character* chC = thisptr->getCharacter();
-        if (chC && downedOrderDriven(chC))
-        {
-            CombatClass* ccFlipped = cmuDownedSuspendCombatMode(chC);
-            s_charMovUpdateOrig(thisptr, time);
-            if (ccFlipped)
-                cmuDownedRestoreCombatMode(ccFlipped);
-            return;
-        }
     }
     // Only a real key press refreshes this; otherwise one tap drives forever in combat.
     if (!combatBridge)

@@ -70,7 +70,6 @@ static bool            s_retreatLockEverActive       = false;
 
 // Combat AI is suspended only while WASD is held, so the two never fight each frame.
 
-static bool            s_wasdDownedMovementActive    = false;
 
 static bool            s_playDeadExitDone            = false;
 
@@ -163,7 +162,6 @@ static void clearAllState()
     s_combatReentryAllowed     = false;
     s_retreatLockGoSuppressed     = false;
     s_retreatLockEverActive       = false;
-    s_wasdDownedMovementActive    = false;
     s_playDeadExitDone            = false;
     // Load or teardown: the scene and the detached node are gone, so no camera calls here.
     s_fpActive                    = false;

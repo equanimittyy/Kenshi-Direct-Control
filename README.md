@@ -111,6 +111,10 @@ The plugin is one C++ translation unit (`src/WASDCombatPlugin.cpp` and the `src/
 2. The project expects [KenshiLib](https://github.com/KenshiReclaimer/KenshiLib/) headers and libraries — either set the `KENSHILIB_DIR` environment variable, or place the [KenshiLib example dependencies](https://github.com/BFrizzleFoShizzle/KenshiLib_Examples_deps) (KenshiLib, Ogre, MyGUI, Boost 1.60) in a sibling `KenshiLib_Examples_deps` folder as referenced by the `.vcxproj`.
 3. Build **Release | x64**. The output `WASDCombatPlugin.dll` goes in `Kenshi/mods/WASDCombatPlugin/` alongside the `.ini`.
 
+## Credits
+
+The first-person grass streaming technique, which moves the camera center node only while the character moves, comes from KenshiFP.
+
 ## License
 
 [GPL-3.0](LICENSE)

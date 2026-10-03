@@ -783,7 +783,7 @@ static void fpPlaceCamera(CameraClass* thisptr, const Ogre::Vector3& eye, const 
         s_fpLastStreamValid = true;
     }
 
-    // Grass pages around the center node, so move it only while moving (technique from KenshiFP).
+    // Grass pages around the center node, so move it only while moving.
     if (s_fpFoliageCenterMode && thisptr->center && s_fpNode && fpMoving)
     {
         Ogre::Vector3 eyeWorld = s_fpNode->_getDerivedPositionUpdated();
