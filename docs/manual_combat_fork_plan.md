@@ -9,12 +9,12 @@ Direct Combat is a branch of Direct Control. It uses the same activation tree as
 Direct Combat adds:
 
 - The combat rules in [Direct Combat mode](#direct-combat-mode).
-- Keys 1, 2, and 3 switch between weapons and unarmed. The step 1 spec confirms the slot mapping.
+- Keys 1, 2, and 3 switch weapons: 1 draws the back weapon, 2 draws the hip weapon, and 3 goes unarmed. This is the Manual Combat mapping.
 - A third-person shoulder camera. The mouse turns the camera and the character's facing.
 
 Direct Combat is for melee and unarmed fighting only. With a crossbow drawn, the vanilla ranged AI fights, as in Direct Control (see [Rules](#rules)).
 
-Direct Control has no gameplay over-the-shoulder camera. It built one and scrapped it: the comment above `s_fpActive` says that Kenshi's interior floor render is tied to the top-down RTS camera, so a detached camera does not show interior floors. In Direct Control, the camera is the RTS camera that follows the character, with an optional mouse-look toggle (`Ctrl`) and a first-person view (`P`). The detached camera survives only for the inventory face-cam and for first-person. So Direct Combat must build its own shoulder camera (step 8).
+Direct Control has no gameplay over-the-shoulder camera. Upstream built one and scrapped it, because Kenshi's interior floor render is tied to the top-down RTS camera, so a detached camera does not show interior floors. In Direct Control, the camera is the RTS camera that follows the character, with an optional mouse-look toggle (`Ctrl`) and a first-person view (`P`). The detached camera survives only for the inventory face-cam and for first-person. So Direct Combat must build its own shoulder camera (step 9).
 
 ## Direct Combat mode
 
@@ -96,7 +96,7 @@ Rejected: find the check in the combat code that stops attacks in block mode, an
 ### Edge cases
 
 - Block mode may be saved with the character (check in game). If it is, and the player saves while Direct Combat is on, the save stores block mode on. After that save loads, block mode stays on until the player turns it off. The plugin accepts this and does not try to fix it.
-- Keys 1, 2, and 3 switch weapons only while Direct Combat is on. Check whether Kenshi binds these keys by default. If it does, Direct Combat must take them only while it is on, and give them back when it turns off.
+- Keys 1, 2, and 3 switch weapons only while Direct Combat is on. Kenshi dialogue uses these keys to pick an answer, so Direct Combat ignores them while `ForgottenGUI::inDialogue()` is true. Check whether Kenshi binds these keys to anything else by default. If it does, Direct Combat must take them only while it is on, and give them back when it turns off.
 - A left click during an attack does nothing. The plugin does not queue a next attack.
 - A left click with no enemy in reach does nothing.
 - Keys that are held when the attack ends take effect at once. For example, if W is held, the character starts to move. Presses during the attack are not queued.
@@ -175,7 +175,7 @@ These come from our `deps/KenshiLib` headers, which are also the headers that th
 |---|---|
 | Start an attack on a target | `Character::attackTarget(Character* who)` |
 | Read the current target | `Character::getAttackTarget()` |
-| Read weapons | `Character::getCurrentWeapon()`, `Character::getThePreferredWeapon()`, `Character::getRangedWeapon()` |
+| Read weapons | `Character::getCurrentWeapon()`, `Character::getThePreferredWeapon()`, `Character::getRangedWeapon()`, `Inventory::getPrimaryWeapon()`, `Inventory::getSecondaryWeapon()`, member `Character::naturalWeapon` |
 | Switch weapons | `Character::drawWeapon(Item*, std::string)`, `Character::sheatheWeapon()`, `CharacterHuman::equipItem(section, item)` |
 | Enter combat mode | `CombatClass::initCombatMode(const hand& subject, int end, bool focusedTarget)` |
 | Per-frame combat decision | `CombatClass::_NV_go(float)` (already hooked by Direct Control) |
@@ -186,7 +186,9 @@ These come from our `deps/KenshiLib` headers, which are also the headers that th
 | Target selection | `CombatClass::isInAttackZone(Character*)`, `CombatClass::calculateTargetsInAttackZone()` |
 | Current technique | `CombatClass::getCurrentTechnique()` |
 
-`attackState`, `setCombatState`, `changeState`, `isInAttackZone`, and `calculateTargetsInAttackZone` are `protected`. Outside the class, C++ does not let us take their address. Use an access shim such as `struct CombatAccess : CombatClass { using CombatClass::attackState; };` and pass `&CombatAccess::attackState` to `GetRealAddress`. Do not fall back to raw addresses. Direct Control's comment above `verifyPatchSiteBytes` records two crashes that stale raw addresses caused after an RE_Kenshi update.
+`attackState`, `setCombatState`, `changeState`, `isInAttackZone`, and `calculateTargetsInAttackZone` are `protected`. Outside the class, C++ does not let us take their address. Use an access shim such as `struct CombatAccess : CombatClass { using CombatClass::attackState; };` and pass `&CombatAccess::attackState` to `GetRealAddress`. Do not fall back to raw addresses. After an RE_Kenshi update, stale raw addresses caused two crashes in upstream Direct Control v1.3.0: a `playerMove` hook broke the navmesh, and a `showTradeWindow` hook corrupted a helper function.
+
+Call `getCurrentWeapon`, `getThePreferredWeapon`, and `getRangedWeapon` as virtual calls on the character. The Manual Combat log reports that the `CharacterHuman` addresses for these three in our headers (`CharacterHuman.h:24`–`29`) are stale. So do not pass them to `GetRealAddress`, and do not call their `_NV_` forms.
 
 ## Threading rule
 
@@ -208,21 +210,25 @@ Change game state only on the main thread, inside the `mainLoop` hook or another
    - Build with VS2010 (`v100`) against `deps/`, as [plugin_build_setup.md](plugin_build_setup.md) describes.
    - Verify: the unchanged fork builds, loads in game, and behaves the same as the Workshop release of Direct Control.
 
-4. **Direct Combat activation.** This proves the build, the new source files, and the keybind setup before any combat change.
+4. **Prove the attack path.** Manual Combat does not use `Character::attackTarget`. It plays the swing and applies the damage itself, through raw addresses and structure offsets that we cannot use. So our attack path is unproven, and if it fails, the block-mode design of steps 6 and 8 changes. Test it before any other combat step.
+   - Add a temporary debug key. With block mode turned on in the orders panel, the key clears `_defensiveMode`, calls `attackTarget` on the nearest enemy, and sets `_defensiveMode` again when the combat state leaves the attack states, as [Attack past block mode](#attack-past-block-mode) decides. Remove the key after the test.
+   - Verify in game: one key press gives exactly one swing. The swing hits and gives combat XP. After `_defensiveMode` is set again, the character does not attack by itself. If any check fails, decide the attack design again before step 5.
+
+5. **Direct Combat activation.** This proves the build, the new source files, and the keybind setup before any combat change.
    - Add the Direct Combat setting, the press handler, the native command, the INI fallback, the INI save, and the message as [Activation](#activation) describes.
    - Verify in game: the key shows in the Controls menu, and a rebind persists after a restart. Each case in [Activation](#activation) gives the stated result, and a log line shows each change. A switch while Direct Control is on does not move the camera. Each press shows the message, also while Direct Control is off. After a true load, Direct Control is off and the setting is still on. After a game restart, the setting is the same as before. An INI file without the `DirectCombat` key loads with the setting off. With the setting off, Direct Control behaves the same as the step 3 build.
 
-5. **Block mode.**
+6. **Block mode.**
    - Apply the block-mode rules in [Rules](#rules) each time Direct Combat becomes active or stops being active (see [Activation](#activation)), and at a control switch.
    - Remove `BLOCK` from the `isCommittedAction` set while Direct Combat is on.
    - Verify in game: the block-mode checkbox turns on with Direct Combat. In a fight, the character never attacks by itself. It blocks while it stands, does not block while it moves, and blocks again when it stops. A log line shows `getMeleeDefence(true)` above `getMeleeDefence(false)`. The recorded setting comes back when Direct Combat stops being active and when control moves. Check whether a save made during Direct Combat stores block mode on (see [Edge cases](#edge-cases)).
 
-6. **Weapon switching on keys 1, 2, and 3.**
-   - The slot mapping comes from the step 1 spec.
-   - The poll thread records the key press only while Direct Combat is on. The main thread calls the KenshiLib weapon methods.
-   - Verify in game: each key draws the correct weapon in and out of combat. Drawing a crossbow turns block mode off, and drawing a melee weapon or going unarmed turns it on again. With Direct Combat off, the keys keep their vanilla behaviour. The inventory stays correct after a save and load.
+7. **Weapon switching on keys 1, 2, and 3.**
+   - Key 1 draws the back weapon, key 2 draws the hip weapon, and key 3 goes unarmed (`Character::naturalWeapon`). Confirm in game that `Inventory::getPrimaryWeapon` returns the back weapon and `Inventory::getSecondaryWeapon` returns the hip weapon.
+   - The poll thread records the key press only while Direct Combat is on and no dialogue is open. The main thread calls the KenshiLib weapon methods.
+   - Verify in game: each key draws the correct weapon in and out of combat. While a dialogue is open, the keys pick answers and do not switch weapons. Drawing a crossbow turns block mode off, and drawing a melee weapon or going unarmed turns it on again. With Direct Combat off, the keys keep their vanilla behaviour. The inventory stays correct after a save and load.
 
-7. **Committed attack on left click.**
+8. **Committed attack on left click.**
    - The main thread reads the left button every frame in the `mainLoop` hook and starts the attack. The 50 ms poll thread is too slow for this.
    - Pick the nearest enemy inside a cone in front of the character and inside weapon reach. Start the attack with `Character::attackTarget`.
    - Clear `_defensiveMode` for the length of the swing, as [Attack past block mode](#attack-past-block-mode) decides.
@@ -230,13 +236,16 @@ Change game state only on the main thread, inside the `mainLoop` hook or another
    - When the attack ends, make sure block mode is on again.
    - Verify in game: one click gives one full swing. The block-mode checkbox does not change. WASD, mouse movement, and more clicks during the swing do nothing. The swing hits the aimed enemy when several enemies are near. Combat XP still increases. The click reaches the game within one frame, not after the 50 ms poll delay. All of this works in the shoulder camera and in first-person. With Direct Combat off, a left click behaves as in upstream Direct Control.
 
-8. **Shoulder camera.** Direct Control has no gameplay shoulder camera (see [Goal](#goal)).
+9. **Shoulder camera.** Direct Control has no gameplay shoulder camera (see [Goal](#goal)).
    - The camera is on while Direct Combat is active. The mouse turns the camera and the character's facing.
-   - Direct Control scrapped its shoulder camera because interior floors did not render with a detached camera. Start from the first-person floor fix: `restrictPos_hook` runs the game's floor refresh, then puts back the detached camera pose. Also read the KenshiFP camera research in `re/NOTES.md` and `DESIGN.md` (for example, the `inBuilding` and `currentFloor` camera fields).
+   - Direct Control scrapped its shoulder camera because interior floors did not render with a detached camera. Read these leads before you choose a design:
+     - Manual Combat shows interior floors with a shoulder camera. It calls `PlayerInterface::setCurrentFloor`, `getCurrentFloor`, `manuallyOrientCamera`, and `focusCamera` (all in `PlayerInterface.h`), and it hooks Ogre `Node::setPosition`.
+     - The Direct Control first-person floor fix: `restrictPos_hook` runs the game's floor refresh, then puts back the detached camera pose.
+     - The KenshiFP camera research in `re/NOTES.md` and `DESIGN.md` (for example, the `inBuilding` and `currentFloor` camera fields).
    - `P` switches between the shoulder camera and first-person while Direct Combat is active (see [Edge cases](#edge-cases)).
    - Verify in game: the camera follows the character outdoors and inside multi-storey buildings, and each floor renders. The camera and the facing freeze during an attack. `P` goes to first-person and back to the shoulder camera.
 
-9. **Release.** Complete the GPLv3 obligations in [Rules for each source](#rules-for-each-source). Then publish on Steam Workshop and Nexus with a link to the source.
+10. **Release.** Complete the GPLv3 obligations in [Rules for each source](#rules-for-each-source). Then publish on Steam Workshop and Nexus with a link to the source.
 
 ## Open decisions
 
