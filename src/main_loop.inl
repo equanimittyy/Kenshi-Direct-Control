@@ -1913,6 +1913,8 @@ static void mainLoop_hook(GameWorld* thisptr, float time)
     // 8. Periodic squad-threat scan.
     mlScanSquadThreat(thisptr);
 
+    mlRunAttackProbe(thisptr);
+
     // 9. Post-AI WASD re-application and instant stop.
     if (!(s_mode == MODE_FREE_MOVE && s_freeMoveAnchor && s_freeMoveAnchor->movement) || s_lootUiSuspendActive)
     {

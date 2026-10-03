@@ -53,6 +53,9 @@
     <ClInclude Include="src\movement_hooks.inl">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\attack_probe.inl">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\main_loop.inl">
       <Filter>Header Files</Filter>
     </ClInclude>

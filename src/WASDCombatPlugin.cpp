@@ -65,6 +65,7 @@ public:
 #include "camera.inl"
 #include "camera_hooks.inl"
 #include "movement_hooks.inl"
+#include "attack_probe.inl"
 #include "main_loop.inl"
 #include "game_hooks.inl"
 #include "native_keybinds.inl"

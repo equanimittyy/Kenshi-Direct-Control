@@ -109,6 +109,7 @@
     <ClInclude Include="src\camera.inl" />
     <ClInclude Include="src\camera_hooks.inl" />
     <ClInclude Include="src\movement_hooks.inl" />
+    <ClInclude Include="src\attack_probe.inl" />
     <ClInclude Include="src\main_loop.inl" />
     <ClInclude Include="src\game_hooks.inl" />
     <ClInclude Include="src\native_keybinds.inl" />
