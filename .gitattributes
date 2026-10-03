@@ -1,0 +1,7 @@
+# The project builds in Visual Studio on Windows, so working copies use CRLF.
+# The repository stores LF, which is how the existing history is committed.
+* text=auto eol=crlf
+
+# Shell scripts run inside the Linux dev container. A CRLF checkout on Windows
+# breaks the shebang line, so the firewall script and hooks fail to start.
+*.sh text eol=lf
